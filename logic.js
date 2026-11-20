@@ -71,11 +71,15 @@ export function normalizeAll(list) {
   return out;
 }
 
-function findTodoItem(todo, match) {
+/** Finds the task a phrase refers to: an exact (case-insensitive) match wins over a partial one. */
+function matchTask(items, match) {
   const m = str(match).toLowerCase().trim();
   if (!m) return null;
-  return todo.items.find((i) => { const t = i.text.toLowerCase(); return t.includes(m) || m.includes(t); }) || null;
+  return items.find((i) => i.text.toLowerCase() === m)
+    || items.find((i) => { const t = i.text.toLowerCase(); return t.includes(m) || m.includes(t); })
+    || null;
 }
+const findTodoItem = (todo, match) => matchTask(todo.items, match);
 
 /** Applies actions to a copy of the widget list and returns the new list. */
 export function applyActions(widgets, actions) {
@@ -275,4 +279,36 @@ export async function askClaude({ apiKey, model, text, widgets, fetchImpl = fetc
   const data = await res.json();
   const raw = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
   return parseClaudeReply(raw);
+}
+
+// ---------- to-do list synced with a Google Sheet (via the Apps Script in apps-script/Code.gs) ----------
+// Claude Duet edits the sheet's rows; the dashboard sends to-do actions to the script and gets the full list back.
+
+export const isTodoAction = (a) => typeof a?.op === 'string' && a.op.startsWith('todo_');
+
+export class SheetError extends Error {}
+
+// Real deployments end in /exec on script.google.com; localhost is allowed for the local mock.
+const SHEET_URL = /^(https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec|http:\/\/localhost:\d+\/[\w/-]*)$/;
+
+export function sheetClient({ url, secret, fetchImpl = (...a) => fetch(...a) }) {
+  if (!SHEET_URL.test(url || '')) throw new SheetError('Paste the web app URL from Apps Script (it ends in /exec).');
+  if (!secret) throw new SheetError('Paste the secret from the setup step.');
+  return {
+    /** Sends to-do actions (or none, to just read) and returns the sheet's current tasks. */
+    async sync(actions = []) {
+      let res;
+      try {
+        // No Content-Type header: a text/plain body keeps this a "simple" request, which Apps Script accepts cross-origin.
+        res = await fetchImpl(url, { method: 'POST', body: JSON.stringify({ secret, actions: actions.filter(isTodoAction) }) });
+      } catch {
+        throw new SheetError('Can’t reach the Google Sheet. Check the internet connection.');
+      }
+      if (!res.ok) throw new SheetError(`Google Sheet error (${res.status}).`);
+      let data;
+      try { data = await res.json(); } catch { throw new SheetError('The sheet didn’t send data back. Check the web app is deployed with access for “Anyone”.'); }
+      if (data.error) throw new SheetError(data.error === 'Unauthorized' ? 'The sheet rejected the secret.' : `Sheet: ${str(data.error, 100)}`);
+      return normalizeTodoItems((Array.isArray(data.items) ? data.items : []).map((i) => ({ text: i?.text, done: !!i?.done })));
+    },
+  };
 }

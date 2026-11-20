@@ -50,6 +50,7 @@
     <form id="settings-form" method="dialog" class="settings">
       <h2 id="settings-title">Settings</h2>
 
+      <h3 class="settings-section">Claude</h3>
       <label for="api-key">Claude API key</label>
       <input id="api-key" class="input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-ant-…">
       <p class="hint">Optional. Lets Claude understand any request. The key is saved only in this device’s browser and is sent only to Anthropic. It is never stored on GitHub. Use a key with a low spending limit.</p>
@@ -57,6 +58,16 @@
       <label for="model">Model</label>
       <input id="model" class="input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
 
+      <h3 class="settings-section">Google Sheet to-do sync</h3>
+      <label for="sheet-url">Web app URL</label>
+      <input id="sheet-url" class="input" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec">
+      <label for="sheet-secret">Secret</label>
+      <input id="sheet-secret" class="input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <p class="hint">Optional. Shares the to-do list with a Google Sheet so Claude Duet can add and tick tasks. <a href="https://github.com/LucasP91/voice-dashboard#google-sheet-sync-claude-duet" target="_blank" rel="noopener">Setup steps</a></p>
+      <p id="sheet-hint" class="hint sheet-msg" aria-live="polite"></p>
+      <button id="disconnect-sheet" class="btn" type="button">Disconnect sheet</button>
+
+      <h3 class="settings-section">Display</h3>
       <label class="toggle"><input id="aurora-toggle" type="checkbox"> Animate the background</label>
 
       <div class="row settings-actions">

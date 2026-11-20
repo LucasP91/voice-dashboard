@@ -1,6 +1,6 @@
 // Voice dashboard client. Static site: state lives in this device's localStorage.
 // All stored/model-provided text is inserted with textContent (never innerHTML).
-import { applyActions, askClaude, localParse, normalizeAll } from './logic.js';
+import { applyActions, askClaude, isTodoAction, localParse, normalizeAll, sheetClient } from './logic.js';
 
 const $ = (sel) => document.querySelector(sel);
 const grid = $('#grid');
@@ -110,21 +110,21 @@ function buildTodo(w) {
     const text = addInput.value.trim();
     if (!text) return;
     refocusTodo = true;
-    widgets = applyActions(widgets, [{ op: 'todo_add', items: [text] }]);
-    save(); render();
+    addInput.value = '';
+    runActions([{ op: 'todo_add', items: [text] }]);
   } }, addInput, el('button', { class: 'btn btn-primary', type: 'submit', text: 'Add' }));
 
   const list = w.items.length
     ? el('ul', { class: 'todo-list' }, ...w.items.map((item) => el('li', { class: 'todo-item' },
-      checkButton(item.text, item.done, () => mutate(() => { item.done = !item.done; })),
-      el('button', { class: 'todo-del', type: 'button', 'aria-label': `Delete ${item.text}`, text: '✕', onclick: () => mutate(() => { w.items = w.items.filter((i) => i !== item); }) }),
+      checkButton(item.text, item.done, () => runActions([{ op: 'todo_done', match: item.text, done: !item.done }])),
+      el('button', { class: 'todo-del', type: 'button', 'aria-label': `Delete ${item.text}`, text: '✕', onclick: () => runActions([{ op: 'todo_remove', match: item.text }]) }),
     )))
     : el('p', { class: 'todo-empty', text: 'Nothing to do. Say “add milk to my to-do list”.' });
 
   return card(w, 'todo-card', body(list),
     el('div', { class: 'todo-foot' },
-      el('span', { text: `${left} to do` }),
-      doneCount ? el('button', { class: 'btn', type: 'button', text: `Clear ${doneCount} done`, onclick: () => mutate(() => { w.items = w.items.filter((i) => !i.done); }) }) : null,
+      el('span', { class: 'todo-count' }, `${left} to do`, el('span', { id: 'todo-sync', class: 'todo-sync', role: 'status', text: syncLabel() })),
+      doneCount ? el('button', { class: 'btn', type: 'button', text: `Clear ${doneCount} done`, onclick: () => runActions([{ op: 'todo_clear_done' }]) }) : null,
     ),
     addForm,
   );
@@ -135,9 +135,16 @@ const buildWeather = (w) => card(w, '', body(el('div', { class: 'big', 'data-wea
 const BUILDERS = { clock: buildClock, timer: buildTimer, note: buildNote, checklist: buildChecklist, weather: buildWeather, todo: buildTodo };
 
 function render() {
+  // Keep a half-typed task and its focus across re-renders (sheet polling re-renders the card).
+  const typing = $('#todo-input');
+  const draft = typing?.value || '';
+  const hadFocus = !!typing && document.activeElement === typing;
   grid.replaceChildren(...widgets.map((w) => BUILDERS[w.type]?.(w)).filter(Boolean));
   empty.hidden = widgets.length > 0;
-  if (refocusTodo) { refocusTodo = false; $('#todo-input')?.focus(); }
+  const todoInput = $('#todo-input');
+  if (todoInput && draft && !refocusTodo) todoInput.value = draft;
+  if (todoInput && (refocusTodo || hadFocus)) todoInput.focus();
+  refocusTodo = false;
   tick();
 }
 
@@ -187,6 +194,104 @@ function tick() {
   }
 }
 
+// ---------- to-do sync with a Google Sheet ----------
+// Changes show on screen at once. To-do actions queue up and go to the sheet in order; unsent ones are kept
+// (also across reloads) and retried, so a dropped connection doesn't lose a tick or a new task.
+const SHEET_POLL_MS = 60_000;
+let sheet = null;
+let pending = [];
+try { pending = JSON.parse(store.get('vd:sheet-pending', '[]')).filter(isTodoAction); } catch { pending = []; }
+let syncing = false;
+let syncAgain = false;
+let syncStatus = { state: 'off', text: '' };
+
+function getSheetConfig() { try { return JSON.parse(store.get('vd:sheet', 'null')); } catch { return null; } }
+function savePending() { store.set('vd:sheet-pending', JSON.stringify(pending)); }
+
+function syncLabel() {
+  if (!sheet) return '';
+  return { busy: 'Syncing…', ok: 'Sheet synced', error: `⚠ ${syncStatus.text}` }[syncStatus.state] || '';
+}
+function setSyncStatus(state, text = '') {
+  syncStatus = { state, text };
+  const node = $('#todo-sync');
+  if (node) node.textContent = syncLabel();
+}
+
+/** The one way the dashboard changes: update the screen now, then send any to-do changes to the sheet. */
+function runActions(actions) {
+  widgets = applyActions(widgets, actions);
+  save();
+  render();
+  const todoOps = (actions || []).filter(isTodoAction);
+  if (sheet && todoOps.length) {
+    pending.push(...todoOps);
+    savePending();
+    syncSheet();
+  }
+}
+
+function applySheetItems(items) {
+  const todo = widgets.find((w) => w.type === 'todo');
+  if (!todo) return; // the card was removed on this iPad; don't bring it back on a poll
+  const key = (list) => JSON.stringify(list.map((i) => [i.text, i.done]));
+  if (key(todo.items) === key(items)) return;
+  todo.items = items;
+  save();
+  render();
+}
+
+async function syncSheet() {
+  if (!sheet) return;
+  if (syncing) { syncAgain = true; return; }
+  syncing = true;
+  const client = sheet;
+  const batch = pending.slice(0, 20);
+  setSyncStatus('busy');
+  try {
+    const items = await client.sync(batch);
+    if (client !== sheet) return; // disconnected while waiting
+    pending = pending.slice(batch.length);
+    savePending();
+    if (!pending.length) applySheetItems(items); // with changes still queued, the sheet's copy is out of date
+    setSyncStatus('ok');
+  } catch (err) {
+    setSyncStatus('error', err.message);
+  } finally {
+    syncing = false;
+    const more = syncAgain || (pending.length > 0 && syncStatus.state === 'ok');
+    syncAgain = false;
+    if (more) syncSheet();
+  }
+}
+
+/** First connection: keep this iPad's unfinished tasks by copying the ones the sheet doesn't have. */
+async function connectSheet() {
+  const local = (widgets.find((w) => w.type === 'todo')?.items || []).filter((i) => !i.done).map((i) => i.text);
+  if (!widgets.some((w) => w.type === 'todo')) { widgets = applyActions(widgets, [{ op: 'add', widget: { type: 'todo' } }]); save(); render(); }
+  setSyncStatus('busy');
+  try {
+    const have = new Set((await sheet.sync([])).map((i) => i.text.toLowerCase()));
+    const missing = local.filter((t) => !have.has(t.toLowerCase()));
+    if (missing.length) { pending.push({ op: 'todo_add', items: missing }); savePending(); }
+    setTranscript(missing.length ? `Connected. Copied ${missing.length} task${missing.length > 1 ? 's' : ''} from this iPad to the sheet.` : 'Connected to the Google Sheet.');
+  } catch (err) {
+    setSyncStatus('error', err.message);
+    setTranscript(`Couldn’t reach the sheet: ${err.message}`);
+    return;
+  }
+  syncSheet();
+}
+
+function disconnectSheet() {
+  sheet = null;
+  pending = [];
+  store.del('vd:sheet');
+  store.del('vd:sheet-pending');
+  setSyncStatus('off');
+  render();
+}
+
 // ---------- settings ----------
 const dialog = $('#settings');
 const keyInput = $('#api-key');
@@ -204,22 +309,58 @@ function syncChip() {
   chip.dataset.state = ai ? 'ai' : 'local';
 }
 
+const sheetUrlInput = $('#sheet-url');
+const sheetSecretInput = $('#sheet-secret');
+const sheetHint = $('#sheet-hint');
+
 $('#open-settings').addEventListener('click', () => {
   keyInput.value = getKey();
   modelInput.value = getModel();
   auroraToggle.checked = store.get('vd:aurora', 'on') !== 'off';
+  const cfg = getSheetConfig();
+  sheetUrlInput.value = cfg?.url || '';
+  sheetSecretInput.value = cfg?.secret || '';
+  sheetHint.textContent = '';
   dialog.showModal();
 });
 $('#clear-key').addEventListener('click', () => { store.del('vd:key'); keyInput.value = ''; syncChip(); setTranscript('Claude key removed.'); });
+$('#disconnect-sheet').addEventListener('click', () => {
+  sheetUrlInput.value = '';
+  sheetSecretInput.value = '';
+  disconnectSheet();
+  sheetHint.textContent = 'Disconnected. The to-do list now stays on this iPad only.';
+});
 $('#settings-form').addEventListener('submit', (e) => {
   if (e.submitter?.value !== 'save') return; // Close button just closes
+
+  // Check the sheet details first, so a typo keeps the dialog open with the reason.
+  const url = sheetUrlInput.value.trim();
+  const secret = sheetSecretInput.value.trim();
+  const old = getSheetConfig();
+  const sheetChanged = url !== (old?.url || '') || secret !== (old?.secret || '');
+  if (sheetChanged && (url || secret)) {
+    try {
+      sheet = sheetClient({ url, secret });
+    } catch (err) {
+      e.preventDefault();
+      sheetHint.textContent = err.message;
+      return;
+    }
+    store.set('vd:sheet', JSON.stringify({ url, secret }));
+    pending = [];
+    savePending();
+    connectSheet();
+  } else if (sheetChanged) {
+    disconnectSheet();
+  }
+
   const key = keyInput.value.trim();
   if (key) store.set('vd:key', key); else store.del('vd:key');
   store.set('vd:model', modelInput.value.trim() || DEFAULT_MODEL);
   store.set('vd:aurora', auroraToggle.checked ? 'on' : 'off');
   applyAurora();
   syncChip();
-  setTranscript(key ? 'Settings saved.' : 'Settings saved. Using built-in commands.');
+  if (!sheetChanged) setTranscript(key ? 'Settings saved.' : 'Settings saved. Using built-in commands.');
 });
 
 // ---------- commands ----------
@@ -243,9 +384,7 @@ async function sendCommand(text) {
   sendBtn.disabled = true;
   try {
     const { reply, actions } = await interpret(text);
-    widgets = applyActions(widgets, actions);
-    save();
-    render();
+    runActions(actions);
     setTranscript(reply);
   } catch (err) {
     setTranscript(`Something went wrong: ${err.message}`);
@@ -326,11 +465,16 @@ $('#examples').replaceChildren(...EXAMPLES.map((text) => el('li', {}, el('button
 async function keepAwake() {
   try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch { /* not allowed right now */ }
 }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { keepAwake(); syncSheet(); }
+});
 
 applyAurora();
 syncChip();
 setupVoice();
 keepAwake();
+try { const cfg = getSheetConfig(); if (cfg) sheet = sheetClient(cfg); } catch { store.del('vd:sheet'); }
 render();
 setInterval(tick, 1000);
+syncSheet();
+setInterval(() => { if (document.visibilityState === 'visible') syncSheet(); }, SHEET_POLL_MS);

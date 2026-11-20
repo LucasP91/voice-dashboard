@@ -203,14 +203,22 @@ html[data-aurora="off"] .aurora__layer::after { animation: none; }
 
 /* ---------- settings dialog ---------- */
 dialog {
-  width: min(92vw, 30rem); padding: 0; border: 1px solid var(--color-border); border-radius: var(--radius-lg);
+  margin: auto; /* the global margin reset would otherwise pin the modal to the top-left */
+  width: min(92vw, 30rem); max-height: 90dvh; overflow-y: auto; overscroll-behavior: contain; padding: 0; border: 1px solid var(--color-border); border-radius: var(--radius-lg);
   background: #0f1218; color: var(--color-text);
 }
 dialog::backdrop { background: rgb(0 0 0 / 0.65); }
 .settings { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-5); }
 .settings label { font-weight: 600; }
-.settings .input { height: var(--tap); background: #171b22; }
+.settings .input { flex: none; height: var(--tap); background: #171b22; } /* flex:none: don't squash in the column */
 .hint { color: var(--color-text-muted); font-size: 0.9rem; }
+.hint a { color: var(--color-primary); text-underline-offset: 0.15em; }
+.settings-section { font-size: 1rem; margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--color-border); }
+.settings-section:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
+.todo-count { min-width: 0; }
+.todo-sync { display: block; color: var(--color-text-muted); font-size: 0.8125rem; }
+.todo-sync:empty { display: none; }
+.todo-foot .btn { flex: none; white-space: nowrap; }
 .toggle { display: flex; align-items: center; gap: var(--space-3); min-height: var(--tap); font-weight: 500 !important; }
 .toggle input { width: 24px; height: 24px; accent-color: var(--color-primary); }
 .settings-actions { margin-top: var(--space-2); }
@@ -227,3 +235,5 @@ dialog::backdrop { background: rgb(0 0 0 / 0.65); }
   .grid { padding-left: var(--space-4); padding-right: var(--space-4); }
   .todo-card { grid-row: auto; }
 }
+.sheet-msg { color: var(--color-text); }
+.sheet-msg:empty { display: none; }
