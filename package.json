@@ -1,0 +1,12 @@
+{
+  "name": "voice-dashboard",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Voice-controlled touch dashboard. Static site for GitHub Pages; open it in Safari on an iPad.",
+  "scripts": {
+    "dev": "node dev-server.mjs",
+    "test": "node --test test/logic.test.mjs"
+  },
+  "engines": { "node": ">=20" }
+}
