@@ -107,7 +107,7 @@ function card(w, extraClass, ...body) {
       ))
     : el('div', { class: 'card-head' }, handle,
       el('h2', { class: 'card-title', text: label }),
-      el('button', { class: 'card-remove', type: 'button', 'aria-label': `Remove ${label}`, text: '✕', onclick: () => mutate(() => { widgets = widgets.filter((x) => x.id !== w.id); }) }));
+      el('button', { class: 'card-remove', type: 'button', 'aria-label': `Remove ${label}`, text: '✕', onclick: () => mutate(() => { widgets = widgets.filter((x) => x.id !== w.id); if (w.type === 'todo' || w.type === 'duet') store.set(`vd:${w.type}-hidden`, '1'); }) }));
 
   const classes = ['card', extraClass, isNew && 'enter', arranging && 'arranging'].filter(Boolean).join(' ');
   return el('section', { class: classes, 'data-id': w.id, 'aria-label': label }, head, ...body);
@@ -466,11 +466,26 @@ function setSyncStatus(state, text = '') {
   syncStatus = { state, text };
   const node = $('#todo-sync');
   if (node) node.textContent = syncLabel();
+  syncSheetChip();
+}
+
+/** Top-bar chip: is the Google Sheet connected and working? Tapping it opens Settings. */
+function syncSheetChip() {
+  const chip = $('#sheet-chip');
+  if (!chip) return;
+  const state = !sheet ? 'off' : syncStatus.state === 'error' ? 'error' : syncStatus.state === 'ok' ? 'ok' : 'busy';
+  chip.dataset.state = state;
+  chip.textContent = { off: 'Sheet: not connected', ok: 'Sheet synced', busy: 'Sheet: syncing…', error: '⚠ Sheet problem' }[state];
+  chip.setAttribute('aria-label', `${chip.textContent}${state === 'error' ? `: ${syncStatus.text.replace(/.$/, '')}` : ''}. Open settings.`);
+  chip.title = state === 'error' ? syncStatus.text : '';
 }
 
 /** The one way the dashboard changes: update the screen now, then send any to-do changes to the sheet. */
 function runActions(actions) {
   widgets = applyActions(widgets, actions);
+  for (const type of ['todo', 'duet']) if (widgets.some((w) => w.type === type)) store.del(`vd:${type}-hidden`); // asked for it again
+  // a To-do or Duet card that was just added should fill from the sheet now, not at the next poll
+  if (sheet && (actions || []).some((a) => a.op === 'add' && (a.widget?.type === 'todo' || a.widget?.type === 'duet'))) syncSheet();
   save();
   render();
   const sheetOps = (actions || []).filter(isSheetAction);
@@ -483,14 +498,23 @@ function runActions(actions) {
 
 function applySheetState({ items, questions }) {
   let changed = false;
+  // Show the To-do / Duet card when the sheet has something for it, unless that card was removed on purpose.
+  const ensureCard = (type, hasContent) => {
+    if (!hasContent || widgets.some((w) => w.type === type) || store.get(`vd:${type}-hidden`) === '1') return;
+    widgets = applyActions(widgets, [{ op: 'add', widget: { type } }]);
+    changed = true;
+  };
+  ensureCard('todo', items.length > 0);
+  if (questions) ensureCard('duet', questions.length > 0);
+
   const todo = widgets.find((w) => w.type === 'todo');
   const todoKey = (list) => JSON.stringify(list.map((i) => [i.text, i.done]));
-  if (todo && todoKey(todo.items) !== todoKey(items)) { todo.items = items; changed = true; } // a removed card stays removed
+  if (todo && todoKey(todo.items) !== todoKey(items)) { todo.items = items; changed = true; }
 
   const duet = questions && widgets.find((w) => w.type === 'duet'); // null questions: old script, leave the card alone
   const qKey = (list) => JSON.stringify(list.map((q) => [q.text, q.answer]));
   if (duet && qKey(duet.items) !== qKey(questions)) {
-    const waiting = new Set(duet.items.filter((q) => !q.answer).map((q) => q.text));
+    const waiting = new Set(duet.items.filter((q) => !q.answer).map((q) => q.text)); // new card: empty, so no "answered" notice
     const fresh = questions.filter((q) => q.answer && waiting.has(q.text));
     duet.items = questions;
     changed = true;
@@ -559,6 +583,8 @@ function disconnectSheet() {
   setSyncStatus('off');
   render();
 }
+
+$('#sheet-chip').addEventListener('click', () => $('#open-settings').click());
 
 // ---------- settings ----------
 const dialog = $('#settings');
@@ -822,6 +848,7 @@ document.addEventListener('visibilitychange', () => {
 
 applyAurora();
 syncChip();
+syncSheetChip();
 setupVoice();
 keepAwake();
 try { const cfg = getSheetConfig(); if (cfg) sheet = sheetClient(cfg); } catch { store.del('vd:sheet'); }

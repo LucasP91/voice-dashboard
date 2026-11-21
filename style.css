@@ -299,3 +299,11 @@ html.is-dragging, html.is-dragging * { -webkit-user-select: none; user-select: n
 .duet-wait { margin-top: var(--space-1); color: var(--color-text-muted); font-size: 0.9rem; }
 .duet-foot { color: var(--color-text-muted); font-size: 0.8125rem; }
 @media (max-width: 560px) { .duet-card { grid-row: auto; } }
+
+/* ---------- sheet status chip (tap to open Settings) ---------- */
+.chip-btn { font: inherit; font-size: 0.875rem; cursor: pointer; min-height: var(--tap); }
+.chip-btn:active { background: var(--color-surface-2); }
+.chip[data-state="ok"]::before { background: var(--color-ok); }
+.chip[data-state="busy"]::before { background: var(--color-primary); }
+.chip[data-state="error"] { color: var(--color-danger); border-color: var(--color-danger); }
+.chip[data-state="error"]::before { display: none; }
