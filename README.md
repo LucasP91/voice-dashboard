@@ -44,8 +44,18 @@ Claude Pro/Max subscription. A small bridge (`bridge/claude-bridge.mjs`, no depe
 `claude -p` and the answer back to the dashboard. It counts toward your plan's usage limits like chatting does, never API billing:
 the bridge removes `ANTHROPIC_API_KEY` before starting Claude Code.
 
-What Claude can do from the bridge: answer and search the web. It has no other tools and no MCP servers (so not your email
-or files), and runs in an empty folder. For things that need your email or calendar, say "Duet, …" instead.
+What Claude can do from the bridge (`"access"` in the bridge's `config.json`):
+
+- **`"read"` (default):** answer, search the web, and **read** your Gmail, Google Calendar, Drive, Sheets, Slides and
+  Claude Docs through the connectors your Claude account already has ("Claude, what did my professor email about?",
+  "Claude, what's on my calendar Friday?"). Only the read tools in `READ_TOOLS` are allowed. Claude Code runs in
+  `dontAsk` mode, so anything else is refused, and every write tool (send, reply, draft, delete, label, edit, share…) and every
+  other server (Chrome DevTools, Blender, Higgsfield…) is also blocked by name. These answers take about 10 seconds.
+- **`"web"`:** answer and search the web only, with no connectors.
+
+It never gets a shell or file tools, and runs in an empty folder. To have something sent, changed or booked, say "Duet, …".
+Anyone who can use the iPad can ask about your email and files, so set `"access": "web"` (and restart the bridge) if
+other people use the dashboard.
 Follow-ups work: the last three answers from the past 15 minutes are sent along.
 
 **Needs:** Node.js 20+, Claude Code signed in (the copy inside the Claude desktop app is found automatically), and the

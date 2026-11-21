@@ -320,7 +320,7 @@ export class BridgeError extends Error {}
 
 // HTTPS (e.g. a Tailscale address), or plain http on this computer for testing.
 const BRIDGE_URL = /^(https:\/\/[a-z0-9.-]+(?::\d+)?|http:\/\/(?:localhost|127\.0\.0\.1):\d+)\/?$/i;
-export const ASK_TIMEOUT_MS = 150_000;
+export const ASK_TIMEOUT_MS = 200_000;
 
 export function bridgeClient({ url, token, fetchImpl = (...a) => fetch(...a) }) {
   const base = String(url || '').trim().replace(/\/$/, '');

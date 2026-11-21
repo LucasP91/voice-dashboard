@@ -1,7 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createHandler, buildPrompt, cleanAnswer } from '../bridge/claude-bridge.mjs';
+import { createHandler, buildPrompt, cleanAnswer, claudeArgs, READ_TOOLS, BLOCKED_TOOLS } from '../bridge/claude-bridge.mjs';
+
+test('bridge: read access allows only read tools, refuses the rest, and blocks every write tool', () => {
+  const args = claudeArgs({ model: 'sonnet', promptFile: 'p.txt' });
+  const val = (flag) => args[args.indexOf(flag) + 1];
+  assert.equal(val('--permission-mode'), 'dontAsk');
+  assert.equal(val('--tools'), 'WebSearch'); // no shell, no file tools
+  const allowed = val('--allowedTools').split(',');
+  const blocked = val('--disallowedTools').split(',');
+  assert.ok(allowed.includes('mcp__claude_ai_Gmail__search_threads'));
+  assert.ok(blocked.includes('mcp__claude_ai_Gmail__send_message'));
+  assert.ok(blocked.includes('mcp__chrome-devtools'));
+  for (const t of allowed) assert.ok(!blocked.includes(t), t);
+  for (const t of READ_TOOLS) assert.doesNotMatch(t, /__(send|reply|forward|create|update|delete|trash|share|label|append|copy|batch|export|download)/, t);
+  assert.ok(BLOCKED_TOOLS.length > 40);
+  const web = claudeArgs({ model: 'sonnet', promptFile: 'p.txt', access: 'web' });
+  assert.ok(web.includes('--strict-mcp-config'));
+  assert.ok(!web.join(' ').includes('mcp__claude_ai_Gmail__search_threads'));
+});
 
 test('bridge: answers are tidied into plain text for the card', () => {
   const raw = 'Today is **Saturday**.\n\nSee [the report](https://example.com/x) for more.\n\nSources:\n- [Example](https://example.com/x)\n- [Other](https://other.example)';
