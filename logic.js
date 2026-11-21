@@ -3,7 +3,9 @@
 
 export const TYPES = new Set(['clock', 'timer', 'note', 'checklist', 'weather', 'todo', 'duet', 'claude']);
 export const MAX_QUESTIONS = 20;
-const SINGLE = { todo: 'To-do', duet: 'Duet', claude: 'Claude' }; // widgets there can only be one of
+const SINGLE = { todo: 'To-do', claude: 'Claude' }; // widgets there can only be one of
+// The Claude card holds both kinds of question: "Claude, …" (items, answered by the computer) and
+// "Duet, …" (duet, answered through the sheet). 'duet' is only kept to read dashboards saved before they merged.
 export const MAX_WIDGETS = 24;
 export const MAX_TODOS = 60;
 
@@ -60,8 +62,11 @@ export function normalizeWidget(w) {
       out.city = str(w.city, 60) || 'London';
       break;
     case 'duet':
+      out.items = normalizeQuestions(w.items);
+      break;
     case 'claude':
       out.items = normalizeQuestions(w.items);
+      out.duet = normalizeQuestions(w.duet);
       break;
     case 'todo':
       out.items = normalizeTodoItems(w.items);
@@ -74,8 +79,15 @@ export function normalizeAll(list) {
   const seen = new Set();
   const out = [];
   for (const raw of Array.isArray(list) ? list : []) {
-    const w = normalizeWidget(raw);
+    let w = normalizeWidget(raw);
+    if (w?.type === 'duet') w = normalizeWidget({ id: w.id, type: 'claude', title: SINGLE.claude, items: [], duet: w.items }); // old Duet card
     if (!w || seen.has(w.id)) continue;
+    const claude = w.type === 'claude' && out.find((x) => x.type === 'claude');
+    if (claude) { // an old Duet card and a Claude card: one card with both
+      claude.items = normalizeQuestions([...claude.items, ...w.items]);
+      claude.duet = normalizeQuestions([...claude.duet, ...w.duet]);
+      continue;
+    }
     if (SINGLE[w.type] && out.some((x) => x.type === w.type)) continue; // one to-do list, one Duet card
     seen.add(w.id);
     out.push(w);
@@ -103,14 +115,12 @@ export function applyActions(widgets, actions) {
     return w;
   };
   const ensureTodo = () => ensureSingle('todo');
-  const ensureDuet = () => {
-    const w = ensureSingle('duet');
-    return w;
-  };
+  const ensureDuet = () => ensureSingle('claude');
 
   for (const a of Array.isArray(actions) ? actions : []) {
     if (!a || typeof a !== 'object') continue;
     if (a.op === 'add') {
+      if (a.widget?.type === 'duet') { ensureDuet(); continue; }
       if (SINGLE[a.widget?.type]) { ensureSingle(a.widget.type); continue; }
       const w = normalizeWidget({ ...a.widget, id: undefined });
       if (w && list.length < MAX_WIDGETS) list.push(w);
@@ -138,10 +148,10 @@ export function applyActions(widgets, actions) {
     } else if (a.op === 'duet_ask') {
       const duet = ensureDuet();
       const text = str(a.text, 500).replace(/\s+/g, ' ').trim();
-      if (duet && text) duet.items = normalizeQuestions([...duet.items, { text, asked: new Date().toISOString() }]);
+      if (duet && text) duet.duet = normalizeQuestions([...duet.duet, { text, asked: new Date().toISOString() }]);
     } else if (a.op === 'duet_remove') {
-      const duet = list.find((w) => w.type === 'duet');
-      if (duet) duet.items = duet.items.filter((q) => q.text.toLowerCase() !== str(a.match, 500).toLowerCase().trim());
+      const duet = list.find((w) => w.type === 'claude');
+      if (duet) duet.duet = duet.duet.filter((q) => q.text.toLowerCase() !== str(a.match, 500).toLowerCase().trim());
     } else if (a.op === 'claude_ask') {
       const card = ensureSingle('claude');
       const text = str(a.text, 500).replace(/\s+/g, ' ').trim();
@@ -229,7 +239,7 @@ export function localParse(text, widgets = []) {
   if (duet) {
     const question = duet[1].trim();
     if (!question) return { reply: 'What should I ask Duet? Say “Duet,” then your question.', actions: [] };
-    return { reply: 'Sent to Duet. The answer will show on the Duet card when Duet checks in.', actions: [{ op: 'duet_ask', text: cap1(question) }] };
+    return { reply: 'Sent to Duet. The answer will show on the Claude card when Duet checks in.', actions: [{ op: 'duet_ask', text: cap1(question) }] };
   }
 
   const t = text.trim();

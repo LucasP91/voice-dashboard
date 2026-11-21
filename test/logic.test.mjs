@@ -88,16 +88,28 @@ test('"Duet, …" is sent to Duet, like a wake word', () => {
   assert.match(localParse('what is the capital of peru', []).reply, /“Claude,” for a quick answer, “Duet,”/);
 });
 
-test('duet actions keep one Duet card with the newest 20 questions', () => {
-  let w = applyActions([], [{ op: 'duet_ask', text: 'First?' }]);
-  assert.deepEqual(w.map((x) => x.type), ['duet']);
-  for (let i = 0; i < 25; i++) w = applyActions(w, [{ op: 'duet_ask', text: `Q${i}` }]);
-  const items = w.find((x) => x.type === 'duet').items;
-  assert.equal(items.length, 20);
-  assert.equal(items.at(-1).text, 'Q24');
-  w = applyActions(w, [{ op: 'duet_remove', match: 'q24' }, { op: 'add', widget: { type: 'duet' } }]);
-  assert.equal(w.filter((x) => x.type === 'duet').length, 1);
-  assert.equal(w.find((x) => x.type === 'duet').items.at(-1).text, 'Q23');
+test('duet questions live on the Claude card (newest 20), next to Claude questions', () => {
+  let w = applyActions([], [{ op: 'duet_ask', text: 'First?' }, { op: 'claude_ask', text: 'Quick?', asked: 't1' }]);
+  assert.deepEqual(w.map((x) => x.type), ['claude']);
+  assert.deepEqual(w[0].duet.map((q) => q.text), ['First?']);
+  assert.deepEqual(w[0].items.map((q) => q.text), ['Quick?']);
+  for (let i = 0; i < 25; i++) w = applyActions(w, [{ op: 'duet_ask', text: 'Q' + i }]);
+  assert.equal(w[0].duet.length, 20);
+  assert.equal(w[0].duet.at(-1).text, 'Q24');
+  w = applyActions(w, [{ op: 'duet_remove', match: 'q24' }, { op: 'add', widget: { type: 'duet' } }, { op: 'add', widget: { type: 'claude' } }]);
+  assert.equal(w.length, 1);
+  assert.equal(w[0].duet.at(-1).text, 'Q23');
+  assert.equal(w[0].items.length, 1);
+});
+
+test('a saved Duet card becomes (or joins) the Claude card', () => {
+  const duet = { id: 'd1', type: 'duet', title: 'Duet', items: [{ text: 'Old?', asked: 'a', answer: 'Yes.' }] };
+  let out = normalizeAll([{ id: 'c', type: 'clock' }, duet]);
+  assert.deepEqual(out.map((x) => [x.id, x.type, x.title]), [['c', 'clock', ''], ['d1', 'claude', 'Claude']]);
+  assert.equal(out[1].duet[0].answer, 'Yes.');
+  out = normalizeAll([{ id: 'k', type: 'claude', items: [{ text: 'Quick?', asked: 'b' }] }, duet]);
+  assert.equal(out.length, 1);
+  assert.deepEqual([out[0].items[0].text, out[0].duet[0].text], ['Quick?', 'Old?']);
 });
 
 test('"Claude, …" asks Claude on the computer, like a wake word', () => {

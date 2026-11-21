@@ -106,7 +106,7 @@ function card(w, extraClass, ...body) {
       ))
     : el('div', { class: 'card-head' }, handle,
       el('h2', { class: 'card-title', text: label }),
-      el('button', { class: 'card-remove', type: 'button', 'aria-label': `Remove ${label}`, text: '✕', onclick: () => mutate(() => { widgets = widgets.filter((x) => x.id !== w.id); if (w.type === 'todo' || w.type === 'duet') store.set(`vd:${w.type}-hidden`, '1'); }) }));
+      el('button', { class: 'card-remove', type: 'button', 'aria-label': `Remove ${label}`, text: '✕', onclick: () => mutate(() => { widgets = widgets.filter((x) => x.id !== w.id); if (w.type === 'todo' || w.type === 'claude') store.set(`vd:${w.type}-hidden`, '1'); }) }));
 
   const classes = ['card', extraClass, isNew && 'enter', arranging && 'arranging'].filter(Boolean).join(' ');
   return el('section', { class: classes, 'data-id': w.id, 'aria-label': label }, head, ...body);
@@ -200,49 +200,50 @@ function ago(iso) {
   return new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-function buildDuet(w) {
-  const list = w.items.length
-    ? el('ul', { class: 'duet-list' }, ...[...w.items].reverse().map((q) => el('li', { class: `duet-item${q.answer ? ' answered' : ''}` },
-      el('div', { class: 'duet-q' },
-        el('p', { class: 'duet-q-text', text: q.text }),
-        el('button', { class: 'todo-del', type: 'button', 'aria-label': `Delete question: ${q.text}`, text: '✕', onclick: () => runActions([{ op: 'duet_remove', match: q.text }]) })),
-      q.answer
-        ? el('p', { class: 'duet-a', text: q.answer })
-        : el('p', { class: 'duet-wait', 'data-asked': q.asked, text: `Waiting for Duet · asked ${ago(q.asked)}` }),
-    )))
-    : el('p', { class: 'todo-empty', text: 'Say “Duet,” then a question or request. Answers show up here.' });
-  return card(w, 'duet-card', body(list),
-    el('p', { class: 'duet-foot', text: sheet ? 'Duet answers when it checks your Google Sheet.' : 'Connect the Google Sheet in Settings so Duet can see these.' }));
-}
-
+/** One card for both: "Claude, …" (answered in seconds by the computer) and "Duet, …" (answered through the sheet). */
 function buildClaude(w) {
-  const list = w.items.length
-    ? el('ul', { class: 'duet-list' }, ...[...w.items].reverse().map((q) => el('li', { class: `duet-item${q.answer ? ' answered' : ''}${q.error ? ' failed' : ''}` },
+  const all = [
+    ...w.items.map((q) => ({ ...q, by: 'claude' })),
+    ...w.duet.map((q) => ({ ...q, by: 'duet' })),
+  ].sort((a, b) => (Date.parse(b.asked) || 0) - (Date.parse(a.asked) || 0)); // newest first
+
+  const status = (q) => {
+    if (q.answer) return el('p', { class: 'duet-a', text: q.answer });
+    if (q.by === 'duet') return el('p', { class: 'duet-wait', 'data-asked': q.asked, text: `Waiting for Duet · asked ${ago(q.asked)}` });
+    if (q.error) {
+      return el('div', { class: 'claude-error' },
+        el('p', { text: q.error }),
+        el('button', { class: 'btn', type: 'button', text: 'Try again', onclick: () => { runActions([{ op: 'claude_retry', asked: q.asked }]); askBridge(q.asked); } }));
+    }
+    return el('p', { class: 'duet-wait claude-thinking', text: 'Thinking…' });
+  };
+
+  const list = all.length
+    ? el('ul', { class: 'duet-list' }, ...all.map((q) => el('li', { class: `duet-item by-${q.by}${q.answer ? ' answered' : ''}${q.error ? ' failed' : ''}` },
       el('div', { class: 'duet-q' },
+        el('span', { class: `ask-tag tag-${q.by}`, text: q.by === 'duet' ? 'Duet' : 'Claude' }),
         el('p', { class: 'duet-q-text', text: q.text }),
-        el('button', { class: 'todo-del', type: 'button', 'aria-label': `Delete question: ${q.text}`, text: '✕', onclick: () => runActions([{ op: 'claude_remove', asked: q.asked }]) })),
-      q.answer
-        ? el('p', { class: 'duet-a', text: q.answer })
-        : q.error
-          ? el('div', { class: 'claude-error' },
-            el('p', { text: q.error }),
-            el('button', { class: 'btn', type: 'button', text: 'Try again', onclick: () => { runActions([{ op: 'claude_retry', asked: q.asked }]); askBridge(q.asked); } }))
-          : el('p', { class: 'duet-wait claude-thinking', text: 'Thinking…' }),
+        el('button', { class: 'todo-del', type: 'button', 'aria-label': `Delete question: ${q.text}`, text: '✕',
+          onclick: () => runActions([q.by === 'duet' ? { op: 'duet_remove', match: q.text } : { op: 'claude_remove', asked: q.asked }]) })),
+      status(q),
     )))
-    : el('p', { class: 'todo-empty', text: 'Say “Claude,” then a question. The answer shows up here in a few seconds.' });
-  return card(w, 'duet-card claude-card', body(list),
-    el('p', { class: 'duet-foot', text: bridge ? 'Answered by Claude on your computer, with your Claude subscription.' : 'Set up Claude on your computer in Settings.' }));
+    : el('p', { class: 'todo-empty', text: 'Say “Claude,” for a quick answer, or “Duet,” for things that need your email or calendar.' });
+
+  const foot = [
+    bridge ? '“Claude,” answers in seconds from your computer.' : '“Claude,” needs your computer set up in Settings.',
+    sheet ? '“Duet,” answers when Duet checks your sheet.' : '“Duet,” needs the Google Sheet connected in Settings.',
+  ].join(' ');
+  return card(w, 'duet-card claude-card', body(list), el('p', { class: 'duet-foot', text: foot }));
 }
 
-const BUILDERS = { clock: buildClock, timer: buildTimer, note: buildNote, checklist: buildChecklist, weather: buildWeather, todo: buildTodo, duet: buildDuet, claude: buildClaude };
+const BUILDERS = { clock: buildClock, timer: buildTimer, note: buildNote, checklist: buildChecklist, weather: buildWeather, todo: buildTodo, claude: buildClaude };
 
 // ---------- "Add a card" tray ----------
 // Cards that are ready as they are get added straight away. Cards that need words (a note, a city,
 // list items) start the command in the box below, so the keyboard or the mic can finish it.
 const CATALOG = [
   { type: 'todo', label: 'To-do list', single: true, widget: { type: 'todo' } },
-  { type: 'claude', label: 'Claude', single: true, widget: { type: 'claude' } },
-  { type: 'duet', label: 'Duet', single: true, widget: { type: 'duet' } },
+  { type: 'claude', label: 'Claude & Duet', single: true, widget: { type: 'claude' } },
   { type: 'clock', label: 'Clock', widget: { type: 'clock', title: 'Clock' } },
   { type: 'timer', label: '5-minute timer', widget: { type: 'timer', title: 'Timer', seconds: 300 } },
   { type: 'weather', label: 'Weather', prompt: 'Weather in ', hint: 'Type or say a city, then Send.' },
@@ -543,9 +544,9 @@ function syncSheetChip() {
 /** The one way the dashboard changes: update the screen now, then send any to-do changes to the sheet. */
 function runActions(actions) {
   widgets = applyActions(widgets, actions);
-  for (const type of ['todo', 'duet']) if (widgets.some((w) => w.type === type)) store.del(`vd:${type}-hidden`); // asked for it again
-  // a To-do or Duet card that was just added should fill from the sheet now, not at the next poll
-  if (sheet && (actions || []).some((a) => a.op === 'add' && (a.widget?.type === 'todo' || a.widget?.type === 'duet'))) syncSheet();
+  for (const type of ['todo', 'claude']) if (widgets.some((w) => w.type === type)) store.del(`vd:${type}-hidden`); // asked for it again
+  // a To-do or Claude card that was just added should fill from the sheet now, not at the next poll
+  if (sheet && (actions || []).some((a) => a.op === 'add' && (a.widget?.type === 'todo' || a.widget?.type === 'claude'))) syncSheet();
   save();
   render();
   const sheetOps = (actions || []).filter(isSheetAction);
@@ -565,18 +566,18 @@ function applySheetState({ items, questions }) {
     changed = true;
   };
   ensureCard('todo', items.length > 0);
-  if (questions) ensureCard('duet', questions.length > 0);
+  if (questions) ensureCard('claude', questions.length > 0);
 
   const todo = widgets.find((w) => w.type === 'todo');
   const todoKey = (list) => JSON.stringify(list.map((i) => [i.text, i.done]));
   if (todo && todoKey(todo.items) !== todoKey(items)) { todo.items = items; changed = true; }
 
-  const duet = questions && widgets.find((w) => w.type === 'duet'); // null questions: old script, leave the card alone
+  const duet = questions && widgets.find((w) => w.type === 'claude'); // null questions: old script, leave the card alone
   const qKey = (list) => JSON.stringify(list.map((q) => [q.text, q.answer]));
-  if (duet && qKey(duet.items) !== qKey(questions)) {
-    const waiting = new Set(duet.items.filter((q) => !q.answer).map((q) => q.text)); // new card: empty, so no "answered" notice
+  if (duet && qKey(duet.duet) !== qKey(questions)) {
+    const waiting = new Set(duet.duet.filter((q) => !q.answer).map((q) => q.text)); // new card: empty, so no "answered" notice
     const fresh = questions.filter((q) => q.answer && waiting.has(q.text));
-    duet.items = questions;
+    duet.duet = questions;
     changed = true;
     if (fresh.length) setTranscript(fresh.length === 1 ? `Duet answered: “${fresh[0].text}”` : `Duet answered ${fresh.length} questions.`);
   }
@@ -615,7 +616,7 @@ async function syncSheet() {
 /** First connection: keep this iPad's unfinished tasks by copying the ones the sheet doesn't have. */
 async function connectSheet() {
   const local = (widgets.find((w) => w.type === 'todo')?.items || []).filter((i) => !i.done).map((i) => i.text);
-  const localQs = (widgets.find((w) => w.type === 'duet')?.items || []).filter((q) => !q.answer).map((q) => q.text);
+  const localQs = (widgets.find((w) => w.type === 'claude')?.duet || []).filter((q) => !q.answer).map((q) => q.text);
   if (!widgets.some((w) => w.type === 'todo')) { widgets = applyActions(widgets, [{ op: 'add', widget: { type: 'todo' } }]); save(); render(); }
   setSyncStatus('busy');
   try {
@@ -711,6 +712,8 @@ const bridgeTokenInput = $('#bridge-token');
 const bridgeHint = $('#bridge-hint');
 store.del('vd:key'); // the API-key option is gone (subscription only); don't keep an old key around
 store.del('vd:model');
+if (store.get('vd:duet-hidden') === '1' && !widgets.some((w) => w.type === 'claude')) store.set('vd:claude-hidden', '1');
+store.del('vd:duet-hidden');
 
 function applyAurora() { document.documentElement.dataset.aurora = store.get('vd:aurora', 'on'); }
 
@@ -834,7 +837,7 @@ async function sendCommand(text) {
     const { reply, actions } = localParse(text, widgets);
     runActions(actions);
     const askedDuet = actions.some((a) => a.op === 'duet_ask');
-    setTranscript(askedDuet && !sheet ? 'Saved on the Duet card. Connect the Google Sheet in Settings so Duet can see it.' : reply);
+    setTranscript(askedDuet && !sheet ? 'Saved on the Claude card. Connect the Google Sheet in Settings so Duet can see it.' : reply);
     for (const a of actions) if (a.op === 'claude_ask') askBridge(a.asked); // not awaited: other commands keep working meanwhile
   } catch (err) {
     setTranscript(`Something went wrong: ${err.message}`);

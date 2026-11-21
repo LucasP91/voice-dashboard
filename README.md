@@ -3,7 +3,7 @@
 A voice-controlled touch dashboard for an iPad, hosted as a static site on GitHub Pages:
 **https://lucasp91.github.io/voice-dashboard/**. It uses the same Aurora background and colours as the portfolio site.
 
-- **Widgets:** to-do list, Claude, Duet, clock, timer, weather (Open-Meteo, no key), note, checklist.
+- **Widgets:** to-do list, Claude ("Claude, …" and "Duet, …" questions in one card, each labelled), clock, timer, weather (Open-Meteo, no key), note, checklist.
 - **Voice:** tap the mic and speak (Safari's built-in speech recognition). GitHub Pages is HTTPS, so the mic just works.
 - **Claude, …:** quick answers in a few seconds from Claude Code on your computer, on your Claude subscription (no API key). See below.
 - **Commands:** a built-in parser handles the common phrases (to-dos, timers, weather, moving cards).
@@ -23,7 +23,7 @@ A voice-controlled touch dashboard for an iPad, hosted as a static site on GitHu
 | "Remove the clock", "Clear the dashboard" | Removes widgets |
 | "Move the clock to the top", "Put the to-do list at the end", "Move the weather left" | Reorders cards |
 | **"Claude, …"** / "Hey Claude, …" (anything after it) | Asks Claude on your computer; the answer appears on the Claude card in a few seconds |
-| **"Duet, …"** / "Hey Duet, …" (anything after it) | Leaves a question or request for Claude Duet; the answer appears on the Duet card |
+| **"Duet, …"** / "Hey Duet, …" (anything after it) | Leaves a question or request for Claude Duet; the answer appears on the Claude card, labelled Duet |
 
 Cards can also be moved by dragging the ⠿ handle, or by tapping it for ◀ ▶ buttons.
 
@@ -35,7 +35,7 @@ below so you can type or say the rest.
 
 Like talking to Siri: start with **"Duet,"** and the rest goes to Claude Duet through the Google Sheet's **Questions** tab.
 Duet runs on your Claude subscription, so this never uses API tokens. It isn't instant: Duet answers when it checks the
-sheet (on its schedule, or when you tell it to in the Duet app), and the answer then shows on the dashboard's Duet card.
+sheet (on its schedule, or when you tell it to in the Duet app), and the answer then shows on the dashboard's Claude card.
 
 ## Claude on your computer
 
@@ -106,7 +106,7 @@ When `Code.gs` changes (for example, the "Duet, …" Questions tab was added aft
 2. **Deploy → Manage deployments →** pencil (Edit) **→ Version: New version → Deploy.**
    This keeps the same URL, so nothing changes on the iPad. Don't use *New deployment*, which makes a new URL.
 
-Until the script is updated, "Duet, …" questions wait on the dashboard's Duet card and go through afterwards.
+Until the script is updated, "Duet, …" questions wait on the dashboard's Claude card and go through afterwards.
 
 **Why "Anyone"?** Safari can't sign in to Google from the dashboard, so the web app has to be reachable without a login.
 Every request must carry the secret, and the script can only add, tick, untick and remove rows in this one sheet.
