@@ -1,6 +1,6 @@
 // Voice dashboard client. Static site: state lives in this device's localStorage.
 // All stored/model-provided text is inserted with textContent (never innerHTML).
-import { applyActions, askClaude, isTodoAction, localParse, normalizeAll, sheetClient } from './logic.js';
+import { applyActions, askClaude, isTodoAction, localParse, normalizeAll, sheetClient } from './logic.js?v=__BUILD__';
 
 // Safari before 14 lacks replaceChildren, which every render uses.
 if (!Element.prototype.replaceChildren) {
