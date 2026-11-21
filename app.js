@@ -209,6 +209,15 @@ function buildClaude(w) {
 
   const status = (q) => {
     if (q.answer) return el('p', { class: 'duet-a', text: q.answer });
+    if (q.by === 'claude' && q.approval) {
+      const a = q.approval;
+      return el('div', { class: 'approve-box', role: 'group', 'aria-label': `Claude wants to: ${a.title}` },
+        el('p', { class: 'approve-title' }, el('span', { class: 'approve-kicker', text: 'Claude wants to' }), a.title),
+        el('dl', { class: 'approve-fields' }, ...a.fields.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })])),
+        el('div', { class: 'row approve-actions' },
+          el('button', { class: 'btn btn-primary', type: 'button', text: 'Allow', onclick: () => decideApproval(q.asked, a.id, true) }),
+          el('button', { class: 'btn', type: 'button', text: 'Don’t allow', onclick: () => decideApproval(q.asked, a.id, false) })));
+    }
     if (q.by === 'duet') return el('p', { class: 'duet-wait', 'data-asked': q.asked, text: `Waiting for Duet · asked ${ago(q.asked)}` });
     if (q.error) {
       return el('div', { class: 'claude-error' },
@@ -686,14 +695,73 @@ async function askBridge(asked) {
   const since = Date.now() - 15 * 60_000;
   const history = items.filter((x) => x.answer && x.asked < asked && Date.parse(x.asked) > since).slice(-3);
   try {
-    const answer = await bridge.ask(q.text, history);
-    runActions([{ op: 'claude_answer', asked, answer }]);
+    await bridge.start(asked, q.text, history);
     setBridgeStatus('ok');
-    setTranscript(`Claude: ${answer.length > 140 ? `${answer.slice(0, 140)}…` : answer}`);
   } catch (err) {
-    runActions([{ op: 'claude_answer', asked, error: err.message }]);
-    if (/reach|token/i.test(err.message)) setBridgeStatus('error', err.message);
-    setTranscript(err.message);
+    failQuestion(asked, err);
+    return;
+  }
+  followQuestion(asked);
+}
+
+function failQuestion(asked, err) {
+  runActions([{ op: 'claude_answer', asked, error: err.message }]);
+  if (/reach|token/i.test(err.message)) setBridgeStatus('error', err.message);
+  setTranscript(err.message);
+}
+
+// The computer answers in the background; the dashboard checks in until it's done. A long wait (Claude asking you to
+// allow something) or a reload doesn't lose the answer.
+const following = new Set();
+const POLL_MS = 1500;
+const FOLLOW_FOR_MS = 15 * 60_000;
+async function followQuestion(asked) {
+  if (following.has(asked)) return;
+  following.add(asked);
+  const until = Date.now() + FOLLOW_FOR_MS;
+  let misses = 0;
+  let shownApproval = '';
+  try {
+    while (Date.now() < until && bridge) {
+      await new Promise((r) => setTimeout(r, POLL_MS));
+      const q = (widgets.find((w) => w.type === 'claude')?.items || []).find((x) => x.asked === asked);
+      if (!q) return; // deleted
+      let st;
+      try { st = await bridge.status(asked); misses = 0; } catch (err) {
+        if (++misses >= 20) { failQuestion(asked, err); return; } // about 30 s without the computer
+        continue;
+      }
+      if (st.state === 'done') {
+        runActions([{ op: 'claude_answer', asked, answer: st.answer || '' }]);
+        const answer = st.answer || '';
+        setTranscript(`Claude: ${answer.length > 140 ? `${answer.slice(0, 140)}…` : answer}`);
+        return;
+      }
+      if (st.state === 'error') { failQuestion(asked, new Error(st.error || 'Claude couldn’t answer.')); return; }
+      if (st.state === 'unknown') { failQuestion(asked, new Error('No answer arrived (the computer’s bridge restarted).')); return; }
+      const approvalId = st.state === 'approval' ? st.approval?.id || '' : '';
+      if (approvalId !== (q.approval?.id || '')) {
+        runActions([{ op: 'claude_approval', asked, approval: approvalId ? st.approval : null }]);
+        if (approvalId && approvalId !== shownApproval) {
+          shownApproval = approvalId;
+          setTranscript(`Claude needs your OK: ${st.approval.title}. Tap Allow or Don’t allow on the Claude card.`);
+          grid.querySelector('.approve-box')?.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'nearest' });
+        }
+      }
+    }
+    if (bridge) failQuestion(asked, new Error('Claude took too long to answer.'));
+  } finally {
+    following.delete(asked);
+  }
+}
+
+async function decideApproval(asked, approvalId, allow) {
+  runActions([{ op: 'claude_approval', asked, approval: null }]); // hide the buttons straight away
+  setTranscript(allow ? 'Allowed. Claude is carrying on…' : 'Not allowed. Claude won’t do it.');
+  try {
+    await bridge.decide(asked, approvalId, allow);
+  } catch (err) {
+    setTranscript(`Couldn’t send your answer: ${err.message}`);
   }
 }
 
@@ -993,8 +1061,10 @@ keepAwake();
 try { const cfg = getSheetConfig(); if (cfg) sheet = sheetClient(cfg); } catch { store.del('vd:sheet'); }
 try { const cfg = getBridgeConfig(); if (cfg) bridge = bridgeClient(cfg); } catch { store.del('vd:bridge'); }
 // A question still "thinking" after a reload lost its answer: offer to ask again.
-const lost = (widgets.find((w) => w.type === 'claude')?.items || []).filter((q) => !q.answer && !q.error);
-if (lost.length) widgets = applyActions(widgets, lost.map((q) => ({ op: 'claude_answer', asked: q.asked, error: 'No answer arrived (the dashboard was reloaded).' })));
+// Questions still being answered when the dashboard reloaded: pick them up again (the computer kept working on them).
+const unfinished = (widgets.find((w) => w.type === 'claude')?.items || []).filter((q) => !q.answer && !q.error);
+if (unfinished.length && !bridge) widgets = applyActions(widgets, unfinished.map((q) => ({ op: 'claude_answer', asked: q.asked, error: 'No answer arrived (the dashboard was reloaded).' })));
+else for (const q of unfinished) followQuestion(q.asked);
 render();
 pingBridge();
 setInterval(() => { if (document.visibilityState === 'visible') pingBridge(); }, BRIDGE_PING_MS);

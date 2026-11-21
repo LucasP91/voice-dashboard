@@ -46,20 +46,32 @@ the bridge removes `ANTHROPIC_API_KEY` before starting Claude Code.
 
 What Claude can do from the bridge (`"access"` in the bridge's `config.json`):
 
-- **`"read"` (default):** answer, search the web, and **read** your Gmail, Google Calendar, Drive, Sheets, Slides and
-  Claude Docs through the connectors your Claude account already has ("Claude, what did my professor email about?",
-  "Claude, what's on my calendar Friday?"). Only the read tools in `READ_TOOLS` are allowed. Claude Code runs in
-  `dontAsk` mode, so anything else is refused, and every write tool (send, reply, draft, delete, label, edit, share…) and every
-  other server (Chrome DevTools, Blender, Higgsfield…) is also blocked by name. These answers take about 10 seconds.
-  It can also **read files** in your personal folders on the computer (`"folders"` in `config.json`; by default Desktop,
-  Documents, Downloads, OneDrive, Pictures, Videos, Music) with Read, Glob and Grep. Reads anywhere else (AppData, `.ssh`,
-  `.claude`, the bridge's own folder) are refused, as are files that look like secrets (`.env`, keys, certificates,
-  password databases) even inside those folders. It can't write, edit or delete files.
-- **`"web"`:** answer and search the web only, with no connectors.
+- **`"ask"` (default): reads freely, asks before doing anything.**
+  - **Reads** your Gmail, Google Calendar, Drive, Sheets, Slides and Claude Docs, through the connectors your Claude
+    account already has. For example: "Claude, what did my professor email about?" or "Claude, what's on my calendar Friday?"
+  - **Reads files** in your personal folders on the computer (`"folders"`; by default Desktop, Documents, Downloads,
+    OneDrive, Pictures, Videos, Music).
+  - **Does things**, such as sending, replying to or forwarding an email, saving a draft, adding or changing a calendar
+    event, editing a sheet, or creating or editing a file. Each one only happens **after you tap Allow** on the Claude card,
+    which shows exactly what will happen: the recipients, subject and whole message, or the file and its content.
+    **Don't allow**, or no answer within 3 minutes, means it isn't done.
+  - **How the asking works:** Claude Code calls `bridge/approval-mcp.mjs` (its `--permission-prompt-tool`) whenever it wants
+    a tool that isn't pre-approved. Only the read tools in `READ_TOOLS` are pre-approved.
+  - **Example:** "Claude, email Sam that I'll be 10 minutes late" → an **Allow** box with the email.
+- **`"read"`: reading only.** Claude Code runs in `dontAsk` mode and every write tool is blocked by name.
+- **`"web"`: web search only.** No connectors and no files.
 
-It never gets a shell or file tools, and runs in an empty folder. To have something sent, changed or booked, say "Duet, …".
-Anyone who can use the iPad can ask about your email and files, so set `"access": "web"` (and restart the bridge) if
-other people use the dashboard.
+**Always blocked:**
+- a shell;
+- unrelated servers (Chrome DevTools, Blender, Higgsfield…);
+- reads and writes outside your folders without asking (AppData, `.ssh`, `.claude`, the bridge's own folder);
+- files that look like secrets (`.env`, keys, certificates, password databases), even inside your folders.
+
+Claude runs in an empty folder. Questions run in the background on the computer, and the dashboard checks in every 1.5 s,
+so a reload doesn't lose an answer.
+
+Anyone who can use the iPad can read your email and files, and can tap Allow. If other people use the dashboard, set
+`"access": "read"` or `"web"` and restart the bridge.
 Follow-ups work: the last three answers from the past 15 minutes are sent along.
 
 **Needs:** Node.js 20+, Claude Code signed in (the copy inside the Claude desktop app is found automatically), and the

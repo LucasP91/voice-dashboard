@@ -18,9 +18,18 @@ export function genId() {
   try { return crypto.randomUUID().slice(0, 8); } catch { return Math.random().toString(36).slice(2, 10); }
 }
 
+/** Something Claude wants to do, waiting for Allow / Don't allow: { id, title, fields: [[label, value]] }. */
+function normalizeApproval(a) {
+  return {
+    id: str(a?.id, 40),
+    title: str(a?.title, 120) || 'Claude wants to do something',
+    fields: (Array.isArray(a?.fields) ? a.fields : []).slice(0, 12).map((f) => [str(f?.[0], 40), str(f?.[1], 2100)]).filter((f) => f[1]),
+  };
+}
+
 function normalizeQuestions(items) {
   return (Array.isArray(items) ? items : [])
-    .map((q) => ({ id: genId(), text: str(q?.text, 500).replace(/\s+/g, ' ').trim(), asked: str(q?.asked, 40), answer: str(q?.answer, 4000).trim(), answered: str(q?.answered, 40), ...(q?.error ? { error: str(q.error, 200) } : {}) }))
+    .map((q) => ({ id: genId(), text: str(q?.text, 500).replace(/\s+/g, ' ').trim(), asked: str(q?.asked, 40), answer: str(q?.answer, 4000).trim(), answered: str(q?.answered, 40), ...(q?.error ? { error: str(q.error, 200) } : {}), ...(q?.approval ? { approval: normalizeApproval(q.approval) } : {}) }))
     .filter((q) => q.text)
     .slice(-MAX_QUESTIONS);
 }
@@ -156,10 +165,15 @@ export function applyActions(widgets, actions) {
       const card = ensureSingle('claude');
       const text = str(a.text, 500).replace(/\s+/g, ' ').trim();
       if (card && text) card.items = normalizeQuestions([...card.items, { text, asked: str(a.asked, 40) || new Date().toISOString() }]);
+    } else if (a.op === 'claude_approval') {
+      const q = list.find((w) => w.type === 'claude')?.items.find((x) => x.asked === a.asked);
+      if (!q) continue;
+      if (a.approval) q.approval = normalizeApproval(a.approval); else delete q.approval;
     } else if (a.op === 'claude_answer' || a.op === 'claude_retry') {
       const q = list.find((w) => w.type === 'claude')?.items.find((x) => x.asked === a.asked);
       if (!q) continue;
       delete q.error;
+      delete q.approval;
       if (a.op === 'claude_retry') { q.answer = ''; continue; }
       if (a.error) q.error = str(a.error, 200);
       else { q.answer = str(a.answer, 4000).trim() || '(No answer.)'; q.answered = new Date().toISOString(); }
@@ -350,6 +364,14 @@ export function bridgeClient({ url, token, fetchImpl = (...a) => fetch(...a) }) 
   return {
     /** Checks the bridge is up and the token is right. */
     async ping() { return post({ op: 'ping' }, 10_000); },
+    /** Starts answering in the background. id: the question's "asked" time. */
+    async start(id, text, history = []) {
+      return post({ op: 'start', id, text: str(text, 1000), history: history.slice(-3).map((h) => ({ text: str(h.text, 500), answer: str(h.answer, 2000) })) }, 20_000);
+    },
+    /** { state: queued|thinking|approval|done|error|unknown, answer, error, approval } */
+    async status(id) { return post({ op: 'status', id }, 15_000); },
+    /** Answers an approval request (Allow = true). */
+    async decide(id, approval, allow) { return post({ op: 'decide', id, approval, allow: !!allow }, 15_000); },
     /** history: earlier [{ text, answer }] pairs, oldest first, so follow-up questions make sense. */
     async ask(text, history = []) {
       const data = await post({ op: 'ask', text: str(text, 1000), history: history.slice(-3).map((h) => ({ text: str(h.text, 500), answer: str(h.answer, 2000) })) }, ASK_TIMEOUT_MS);

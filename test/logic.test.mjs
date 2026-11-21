@@ -142,6 +142,13 @@ test('claude actions: ask, answer, fail, retry, remove (matched by asked time)',
   assert.deepEqual(items().map((q) => q.text), ['Two?']);
   w = applyActions(w, [{ op: 'add', widget: { type: 'claude' } }]);
   assert.equal(w.length, 1);
+  // an approval request rides on the question until it's answered
+  w = applyActions(w, [{ op: 'claude_approval', asked: 't2', approval: { id: 'a1', title: 'Send an email', fields: [['To', 'me@x.com'], ['Empty', '']] } }]);
+  assert.deepEqual(items()[0].approval, { id: 'a1', title: 'Send an email', fields: [['To', 'me@x.com']] });
+  w = normalizeAll(JSON.parse(JSON.stringify(w)));
+  assert.equal(items()[0].approval.id, 'a1');
+  w = applyActions(w, [{ op: 'claude_answer', asked: 't2', answer: 'Sent.' }]);
+  assert.equal(items()[0].approval, undefined);
 });
 
 test('bridge client: checks the address, sends a simple text body, maps errors', async () => {
