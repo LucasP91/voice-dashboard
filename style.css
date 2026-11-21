@@ -30,6 +30,7 @@
 html { -webkit-text-size-adjust: 100%; }
 
 body {
+  min-height: 100vh; /* fallback for Safari before 15.4 */
   min-height: 100dvh;
   display: grid;
   grid-template-rows: auto 1fr auto;
@@ -204,7 +205,7 @@ html[data-aurora="off"] .aurora__layer::after { animation: none; }
 /* ---------- settings dialog ---------- */
 dialog {
   margin: auto; /* the global margin reset would otherwise pin the modal to the top-left */
-  width: min(92vw, 30rem); max-height: 90dvh; overflow-y: auto; overscroll-behavior: contain; padding: 0; border: 1px solid var(--color-border); border-radius: var(--radius-lg);
+  width: min(92vw, 30rem); max-height: 90vh; max-height: 90dvh; overflow-y: auto; overscroll-behavior: contain; padding: 0; border: 1px solid var(--color-border); border-radius: var(--radius-lg);
   background: #0f1218; color: var(--color-text);
 }
 dialog::backdrop { background: rgb(0 0 0 / 0.65); }
@@ -237,3 +238,25 @@ dialog::backdrop { background: rgb(0 0 0 / 0.65); }
 }
 .sheet-msg { color: var(--color-text); }
 .sheet-msg:empty { display: none; }
+
+/* ---------- settings panel: close button, pinned actions, old-Safari fallback ---------- */
+dialog:not([open]) { display: none; } /* old Safari shows an unknown <dialog> inline otherwise */
+.settings-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.settings-x {
+  flex: none; width: var(--tap); height: var(--tap); margin: calc(var(--space-2) * -1) calc(var(--space-2) * -1) 0 0;
+  display: grid; place-items: center; border: 0; border-radius: 50%;
+  background: transparent; color: var(--color-text-muted); font-size: 1.25rem; cursor: pointer;
+}
+.settings-x:active { background: var(--color-surface-2); }
+.settings-actions {
+  position: sticky; bottom: calc(var(--space-5) * -1); z-index: 1;
+  margin: var(--space-2) calc(var(--space-5) * -1) calc(var(--space-5) * -1);
+  padding: var(--space-3) var(--space-5) var(--space-5);
+  background: #0f1218; border-top: 1px solid var(--color-border);
+}
+/* Without native <dialog> (iPadOS < 15.4): a fixed, centred panel with a dimmed page behind it. */
+html.modal-fallback dialog[open] {
+  position: fixed; inset: 0; z-index: 100; height: fit-content;
+  box-shadow: 0 0 0 100vmax rgb(0 0 0 / 0.65);
+}
+html.modal-fallback body { overflow: hidden; }

@@ -2,6 +2,11 @@
 // All stored/model-provided text is inserted with textContent (never innerHTML).
 import { applyActions, askClaude, isTodoAction, localParse, normalizeAll, sheetClient } from './logic.js';
 
+// Safari before 14 lacks replaceChildren, which every render uses.
+if (!Element.prototype.replaceChildren) {
+  Element.prototype.replaceChildren = function replaceChildren(...nodes) { this.textContent = ''; this.append(...nodes); };
+}
+
 const $ = (sel) => document.querySelector(sel);
 const grid = $('#grid');
 const empty = $('#empty');
@@ -321,8 +326,25 @@ $('#open-settings').addEventListener('click', () => {
   sheetUrlInput.value = cfg?.url || '';
   sheetSecretInput.value = cfg?.secret || '';
   sheetHint.textContent = '';
-  dialog.showModal();
+  openSettings();
 });
+
+// <dialog> needs iPadOS 15.4+. On older Safari, show it as a fixed overlay instead, and close it
+// ourselves (never through form method="dialog", which old Safari treats as a normal page submit).
+const nativeDialog = typeof dialog.showModal === 'function';
+function openSettings() {
+  if (nativeDialog) dialog.showModal();
+  else { dialog.setAttribute('open', ''); document.documentElement.classList.add('modal-fallback'); dialog.querySelector('input')?.focus(); }
+}
+function closeSettings() {
+  if (nativeDialog) { if (dialog.open) dialog.close(); }
+  else { dialog.removeAttribute('open'); document.documentElement.classList.remove('modal-fallback'); }
+  $('#open-settings').focus();
+}
+$('#settings-x').addEventListener('click', closeSettings);
+$('#settings-close').addEventListener('click', closeSettings);
+dialog.addEventListener('click', (e) => { if (e.target === dialog) closeSettings(); }); // tap outside the panel
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !nativeDialog && dialog.hasAttribute('open')) closeSettings(); });
 $('#clear-key').addEventListener('click', () => { store.del('vd:key'); keyInput.value = ''; syncChip(); setTranscript('Claude key removed.'); });
 $('#disconnect-sheet').addEventListener('click', () => {
   sheetUrlInput.value = '';
@@ -331,7 +353,8 @@ $('#disconnect-sheet').addEventListener('click', () => {
   sheetHint.textContent = 'Disconnected. The to-do list now stays on this iPad only.';
 });
 $('#settings-form').addEventListener('submit', (e) => {
-  if (e.submitter?.value !== 'save') return; // Close button just closes
+  e.preventDefault(); // Save is the only submit button; we close the panel ourselves
+  sheetHint.textContent = '';
 
   // Check the sheet details first, so a typo keeps the dialog open with the reason.
   const url = sheetUrlInput.value.trim();
@@ -361,6 +384,7 @@ $('#settings-form').addEventListener('submit', (e) => {
   applyAurora();
   syncChip();
   if (!sheetChanged) setTranscript(key ? 'Settings saved.' : 'Settings saved. Using built-in commands.');
+  closeSettings();
 });
 
 // ---------- commands ----------
@@ -415,8 +439,9 @@ function setListening(on) {
 
 function setupVoice() {
   if (!Recognition) {
-    mic.hidden = true;
-    setTranscript('Voice input isn’t available in this browser. Type a command instead.');
+    // No web speech API here (older iPadOS, or a Home Screen web app). The mic button then opens the
+    // keyboard instead, whose own dictation key works everywhere.
+    mic.setAttribute('aria-label', 'Dictate with the keyboard');
     return;
   }
   recognizer = new Recognition();
@@ -452,8 +477,16 @@ function setupVoice() {
   };
 }
 
+const isHomeScreenApp = navigator.standalone === true || window.matchMedia?.('(display-mode: standalone)').matches;
+
 mic.addEventListener('click', () => {
-  if (!recognizer) return;
+  if (!recognizer) {
+    input.focus(); // must happen inside the tap, or iPadOS won't show the keyboard
+    setTranscript(isHomeScreenApp
+      ? 'Tap 🎤 on the keyboard, speak, then tap Send. (One-tap voice works when the dashboard is opened in Safari.)'
+      : 'Tap 🎤 on the keyboard, speak, then tap Send.');
+    return;
+  }
   if (listening) { recognizer.stop(); return; }
   try { recognizer.start(); } catch { /* already starting */ }
 });
