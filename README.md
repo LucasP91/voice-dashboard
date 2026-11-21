@@ -62,7 +62,15 @@ A second tab, **Questions**, is created by the script and holds what you say aft
 5. **Connect the iPad.** On the dashboard: **Settings → Google Sheet to-do sync**, paste the URL and the secret, **Save**.
    Tasks already on the iPad are copied into the sheet.
 
-If you change `Code.gs` later, use **Deploy → Manage deployments → Edit → New version** so the URL stays the same.
+### Updating the script
+
+When `Code.gs` changes (for example, the "Duet, …" Questions tab was added after the first setup):
+
+1. In the sheet: **Extensions → Apps Script**, replace everything with the new [`apps-script/Code.gs`](apps-script/Code.gs), save.
+2. **Deploy → Manage deployments →** pencil (Edit) **→ Version: New version → Deploy.**
+   This keeps the same URL, so nothing changes on the iPad. Don't use *New deployment*, which makes a new URL.
+
+Until the script is updated, "Duet, …" questions wait on the dashboard's Duet card and go through afterwards.
 
 **Why "Anyone"?** Safari can't sign in to Google from the dashboard, so the web app has to be reachable without a login.
 Every request must carry the secret, and the script can only add, tick, untick and remove rows in this one sheet.

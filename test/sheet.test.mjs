@@ -89,3 +89,20 @@ test('Apps Script: works when the Questions tab already exists or was renamed fi
   assert.deepEqual(r.questions.map((q) => [q.text, q.answer]), [['Old one', 'Old answer']]);
   assert.equal(b.tab('Questions').length, 2); // tasks never land in the Questions tab
 });
+
+test('client: an old sheet script (no questions in its reply) is reported as null, not as "no questions"', async () => {
+  const old = sheetClient({ url: 'https://script.google.com/macros/s/x/exec', secret: 's', fetchImpl: async () => ({ ok: true, json: async () => ({ items: [{ text: 'Milk', done: false }] }) }) });
+  const r = await old.sync([{ op: 'duet_ask', text: 'Hi?' }]);
+  assert.equal(r.questions, null);
+  assert.equal(r.items[0].text, 'Milk');
+});
+
+test('Apps Script: a retried question is not added twice while it is still waiting', () => {
+  const b = loadBridge({ rows: [['Task', 'Done']] });
+  const ask = { secret: 'test-secret', actions: [{ op: 'duet_ask', text: 'Plan my weekend' }] };
+  b.post(ask); b.post(ask); b.post({ ...ask, actions: [{ op: 'duet_ask', text: 'plan my  weekend' }] });
+  assert.equal(b.tab('Questions').length, 2);
+  b.tab('Questions')[1][2] = 'Done: hike Saturday, brunch Sunday.';
+  b.post(ask); // once answered, asking again is a new question
+  assert.equal(b.tab('Questions').length, 3);
+});

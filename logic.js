@@ -373,7 +373,8 @@ export function sheetClient({ url, secret, fetchImpl = (...a) => fetch(...a) }) 
       if (data.error) throw new SheetError(data.error === 'Unauthorized' ? 'The sheet rejected the secret.' : `Sheet: ${str(data.error, 100)}`);
       return {
         items: normalizeTodoItems((Array.isArray(data.items) ? data.items : []).map((i) => ({ text: i?.text, done: !!i?.done }))),
-        questions: normalizeQuestions(data.questions),
+        // null = the sheet's script predates "Duet, …" and needs redeploying (it ignores questions)
+        questions: Array.isArray(data.questions) ? normalizeQuestions(data.questions) : null,
       };
     },
   };

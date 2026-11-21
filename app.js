@@ -1,6 +1,6 @@
 // Voice dashboard client. Static site: state lives in this device's localStorage.
 // All stored/model-provided text is inserted with textContent (never innerHTML).
-import { applyActions, askClaude, isDuetCommand, isSheetAction, localParse, normalizeAll, sheetClient } from './logic.js?v=__BUILD__';
+import { applyActions, askClaude, isDuetCommand, isSheetAction, isTodoAction, localParse, normalizeAll, sheetClient } from './logic.js?v=__BUILD__';
 
 // Safari before 14 lacks replaceChildren, which every render uses.
 if (!Element.prototype.replaceChildren) {
@@ -487,7 +487,7 @@ function applySheetState({ items, questions }) {
   const todoKey = (list) => JSON.stringify(list.map((i) => [i.text, i.done]));
   if (todo && todoKey(todo.items) !== todoKey(items)) { todo.items = items; changed = true; } // a removed card stays removed
 
-  const duet = widgets.find((w) => w.type === 'duet');
+  const duet = questions && widgets.find((w) => w.type === 'duet'); // null questions: old script, leave the card alone
   const qKey = (list) => JSON.stringify(list.map((q) => [q.text, q.answer]));
   if (duet && qKey(duet.items) !== qKey(questions)) {
     const waiting = new Set(duet.items.filter((q) => !q.answer).map((q) => q.text));
@@ -509,10 +509,15 @@ async function syncSheet() {
   try {
     const state = await client.sync(batch);
     if (client !== sheet) return; // disconnected while waiting
-    pending = pending.slice(batch.length);
+    let rest = pending.slice(batch.length);
+    const oldScript = state.questions === null;
+    // An old sheet script ignores questions: keep them queued until it's updated, instead of losing them.
+    if (oldScript) rest = [...batch.filter((a) => !isTodoAction(a)), ...rest];
+    pending = rest;
     savePending();
-    if (!pending.length) applySheetState(state); // with changes still queued, the sheet's copy is out of date
-    setSyncStatus('ok');
+    if (!pending.some(isTodoAction)) applySheetState(state); // with to-do changes still queued, the sheet's copy is out of date
+    if (oldScript && pending.length) setSyncStatus('error', 'Update the sheet script to send “Duet,” questions (README → Updating the script).');
+    else setSyncStatus('ok');
   } catch (err) {
     setSyncStatus('error', err.message);
   } finally {
@@ -534,7 +539,7 @@ async function connectSheet() {
     const have = new Set(remote.items.map((i) => i.text.toLowerCase()));
     const missing = local.filter((t) => !have.has(t.toLowerCase()));
     if (missing.length) { pending.push({ op: 'todo_add', items: missing }); savePending(); }
-    const asked = new Set(remote.questions.map((q) => q.text.toLowerCase()));
+    const asked = new Set((remote.questions || []).map((q) => q.text.toLowerCase()));
     for (const text of localQs.filter((t) => !asked.has(t.toLowerCase()))) pending.push({ op: 'duet_ask', text });
     savePending();
     setTranscript(missing.length ? `Connected. Copied ${missing.length} task${missing.length > 1 ? 's' : ''} from this iPad to the sheet.` : 'Connected to the Google Sheet.');

@@ -140,7 +140,11 @@ function applyActions_(sheet, actions) {
     if (!a || typeof a !== 'object') return;
     if (a.op === 'duet_ask') {
       var question = clean_(a.text, 500);
-      if (question) getQuestions_(true).appendRow([question, new Date(), '', '']);
+      if (!question) return;
+      var qSheet = getQuestions_(true);
+      // A retry (e.g. the reply was lost on a bad connection) must not add the same waiting question twice.
+      var waiting = readQuestions_(qSheet).some(function (x) { return !x.answer && x.text.toLowerCase() === question.toLowerCase(); });
+      if (!waiting) qSheet.appendRow([question, new Date(), '', '']);
       return;
     }
     if (a.op === 'duet_remove') {
