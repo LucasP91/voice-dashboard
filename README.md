@@ -25,6 +25,10 @@ A voice-controlled touch dashboard for an iPad, hosted as a static site on GitHu
 
 Cards can also be moved by dragging the ⠿ handle, or by tapping it for ◀ ▶ buttons.
 
+**Add a card**, under the cards, lists what you can still add. To-do and Duet appear only while they're not on the
+dashboard. Clock and 5-minute timer are added straight away. Weather, Note and Checklist start the command in the box
+below so you can type or say the rest.
+
 ### "Duet, …"
 
 Like talking to Siri: start with **"Duet,"** and the rest goes to Claude Duet through the Google Sheet's **Questions** tab.

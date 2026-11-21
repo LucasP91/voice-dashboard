@@ -32,8 +32,8 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   min-height: 100vh; /* fallback for Safari before 15.4 */
   min-height: 100dvh;
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
   background: var(--color-bg);
   color: var(--color-text);
   font: 400 1rem/1.55 var(--font-sans);
@@ -177,8 +177,21 @@ html[data-aurora="off"] .aurora__layer::after { animation: none; }
 .examples .btn { background: var(--color-surface); border-color: var(--color-border); font-weight: 500; }
 .empty[hidden] { display: none; }
 
+/* ---------- "Add a card" tray: what can still go on the dashboard ---------- */
+.add-tray { padding: 0 var(--space-5) var(--space-5); }
+.add-tray[hidden] { display: none; }
+.add-title { font-size: 0.9rem; font-weight: 600; color: var(--color-text-muted); margin-bottom: var(--space-3); }
+.add-list { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.add-btn {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  background: var(--color-surface); border-color: var(--color-border); border-style: dashed; font-weight: 500;
+}
+.add-btn:hover { background: var(--color-surface-2); }
+.add-plus { color: var(--color-primary); font-size: 1.25rem; font-weight: 700; line-height: 1; }
+
 /* ---------- command bar ---------- */
 .commandbar {
+  margin-top: auto; /* stays at the bottom when the page is short */
   position: sticky; bottom: 0; background: linear-gradient(to top, var(--color-bg) 75%, transparent);
   padding: var(--space-4) var(--space-5) calc(var(--space-4) + env(safe-area-inset-bottom));
 }

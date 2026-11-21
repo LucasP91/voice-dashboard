@@ -1,6 +1,6 @@
 // Voice dashboard client. Static site: state lives in this device's localStorage.
 // All stored/model-provided text is inserted with textContent (never innerHTML).
-import { applyActions, askClaude, isDuetCommand, isSheetAction, isTodoAction, localParse, normalizeAll, sheetClient } from './logic.js?v=__BUILD__';
+import { MAX_WIDGETS, applyActions, askClaude, isDuetCommand, isSheetAction, isTodoAction, localParse, normalizeAll, sheetClient } from './logic.js?v=__BUILD__';
 
 // Safari before 14 lacks replaceChildren, which every render uses.
 if (!Element.prototype.replaceChildren) {
@@ -218,6 +218,46 @@ function buildDuet(w) {
 
 const BUILDERS = { clock: buildClock, timer: buildTimer, note: buildNote, checklist: buildChecklist, weather: buildWeather, todo: buildTodo, duet: buildDuet };
 
+// ---------- "Add a card" tray ----------
+// Cards that are ready as they are get added straight away. Cards that need words (a note, a city,
+// list items) start the command in the box below, so the keyboard or the mic can finish it.
+const CATALOG = [
+  { type: 'todo', label: 'To-do list', single: true, widget: { type: 'todo' } },
+  { type: 'duet', label: 'Duet', single: true, widget: { type: 'duet' } },
+  { type: 'clock', label: 'Clock', widget: { type: 'clock', title: 'Clock' } },
+  { type: 'timer', label: '5-minute timer', widget: { type: 'timer', title: 'Timer', seconds: 300 } },
+  { type: 'weather', label: 'Weather', prompt: 'Weather in ', hint: 'Type or say a city, then Send.' },
+  { type: 'note', label: 'Note', prompt: 'Note: ', hint: 'Type or say the note, then Send.' },
+  { type: 'checklist', label: 'Checklist', prompt: 'Checklist: ', hint: 'Type or say the items with commas between them, then Send.' },
+];
+
+function startCommand(text, hint) {
+  input.value = text;
+  input.focus();
+  try { input.setSelectionRange(text.length, text.length); } catch { /* not supported */ }
+  setTranscript(hint);
+}
+
+function renderTray() {
+  const tray = $('#add-tray');
+  const full = widgets.length >= MAX_WIDGETS;
+  // a To-do or Duet card can only be added once; the others can be added again and again
+  const options = full ? [] : CATALOG.filter((c) => !(c.single && widgets.some((w) => w.type === c.type)));
+  tray.hidden = options.length === 0;
+  $('#add-list').replaceChildren(...options.map((c) => el('li', {}, el('button', {
+    class: 'btn add-btn', type: 'button', 'aria-label': `Add ${c.label}`,
+    onclick: () => {
+      if (c.prompt) { startCommand(c.prompt, c.hint); return; }
+      runActions([{ op: 'add', widget: c.widget }]);
+      setTranscript(`Added ${c.label}.`);
+      // the new card is last: bring it into view and move focus there (this button may have just gone)
+      const added = grid.querySelector(`[data-handle="${widgets[widgets.length - 1]?.id}"]`);
+      added?.focus({ preventScroll: true });
+      added?.closest('.card')?.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'nearest' });
+    },
+  }, el('span', { class: 'add-plus', 'aria-hidden': 'true', text: '+' }), c.label))));
+}
+
 function render() {
   // Never rebuild the cards mid-drag (a sheet sync or timer could fire); do it once the card has landed.
   if (drag?.active || settling) { renderQueued = true; return; }
@@ -228,6 +268,7 @@ function render() {
   const hadFocus = !!typing && document.activeElement === typing;
   grid.replaceChildren(...widgets.map((w) => BUILDERS[w.type]?.(w)).filter(Boolean));
   empty.hidden = widgets.length > 0;
+  renderTray();
   const todoInput = $('#todo-input');
   if (todoInput && draft && !refocusTodo) todoInput.value = draft;
   if (todoInput && (refocusTodo || hadFocus)) todoInput.focus();
