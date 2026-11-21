@@ -3,6 +3,19 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createHandler, buildPrompt, cleanAnswer, claudeArgs, READ_TOOLS, BLOCKED_TOOLS } from '../bridge/claude-bridge.mjs';
 
+test('bridge: folders are added read-only, never with a blanket Read rule, and secrets are blocked', () => {
+  const args = claudeArgs({ model: 'sonnet', promptFile: 'p.txt', folders: ['C:/Users/me/Desktop', 'C:/Users/me/Documents'] });
+  const val = (flag) => args[args.indexOf(flag) + 1];
+  assert.equal(val('--tools'), 'WebSearch,Read,Glob,Grep'); // no Write, Edit or Bash
+  assert.deepEqual(args.filter((a, i) => args[i - 1] === '--add-dir'), ['C:/Users/me/Desktop', 'C:/Users/me/Documents']);
+  const allowed = val('--allowedTools').split(',');
+  assert.ok(!allowed.some((t) => /^(Read|Glob|Grep)/.test(t)), 'a blanket Read rule would open every path');
+  const blocked = val('--disallowedTools').split(',');
+  assert.ok(blocked.includes('Read(**/.env)') && blocked.includes('Grep(**/*.pem)') && blocked.includes('Read(**/.ssh/**)'));
+  // no folders: no file tools at all
+  assert.equal(claudeArgs({ model: 'sonnet', promptFile: 'p.txt' })[claudeArgs({ model: 'sonnet', promptFile: 'p.txt' }).indexOf('--tools') + 1], 'WebSearch');
+});
+
 test('bridge: read access allows only read tools, refuses the rest, and blocks every write tool', () => {
   const args = claudeArgs({ model: 'sonnet', promptFile: 'p.txt' });
   const val = (flag) => args[args.indexOf(flag) + 1];

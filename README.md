@@ -51,6 +51,10 @@ What Claude can do from the bridge (`"access"` in the bridge's `config.json`):
   "Claude, what's on my calendar Friday?"). Only the read tools in `READ_TOOLS` are allowed. Claude Code runs in
   `dontAsk` mode, so anything else is refused, and every write tool (send, reply, draft, delete, label, edit, share…) and every
   other server (Chrome DevTools, Blender, Higgsfield…) is also blocked by name. These answers take about 10 seconds.
+  It can also **read files** in your personal folders on the computer (`"folders"` in `config.json`; by default Desktop,
+  Documents, Downloads, OneDrive, Pictures, Videos, Music) with Read, Glob and Grep. Reads anywhere else (AppData, `.ssh`,
+  `.claude`, the bridge's own folder) are refused, as are files that look like secrets (`.env`, keys, certificates,
+  password databases) even inside those folders. It can't write, edit or delete files.
 - **`"web"`:** answer and search the web only, with no connectors.
 
 It never gets a shell or file tools, and runs in an empty folder. To have something sent, changed or booked, say "Duet, …".
