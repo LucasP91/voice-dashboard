@@ -1,6 +1,6 @@
 // Voice dashboard client. Static site: state lives in this device's localStorage.
 // All stored/model-provided text is inserted with textContent (never innerHTML).
-import { applyActions, askClaude, isTodoAction, localParse, normalizeAll, sheetClient } from './logic.js?v=__BUILD__';
+import { applyActions, askClaude, isDuetCommand, isSheetAction, localParse, normalizeAll, sheetClient } from './logic.js?v=__BUILD__';
 
 // Safari before 14 lacks replaceChildren, which every render uses.
 if (!Element.prototype.replaceChildren) {
@@ -17,7 +17,7 @@ const form = $('#command-form');
 const sendBtn = $('#send');
 
 const DEFAULT_MODEL = 'claude-sonnet-5-5';
-const EXAMPLES = ['Add milk to my to-do list', 'Timer for 5 minutes', 'Weather in London', 'Add a clock', 'Note: call the dentist'];
+const EXAMPLES = ['Add milk to my to-do list', 'Duet, plan my weekend', 'Timer for 5 minutes', 'Weather in London', 'Add a clock', 'Note: call the dentist'];
 const FAHRENHEIT = /^en-US/i.test(navigator.language);
 
 // ---------- storage (every access guarded: it can throw in private windows) ----------
@@ -188,7 +188,35 @@ function buildTodo(w) {
 
 const buildWeather = (w) => card(w, '', body(el('div', { class: 'big', 'data-weather': w.city, text: '…' }), el('div', { class: 'sub', 'data-weather-sub': w.city, text: w.city })));
 
-const BUILDERS = { clock: buildClock, timer: buildTimer, note: buildNote, checklist: buildChecklist, weather: buildWeather, todo: buildTodo };
+/** "5 min ago", "yesterday", or a date, for when a question was asked. */
+function ago(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  const min = Math.round((Date.now() - t) / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h} h ago`;
+  if (h < 48) return 'yesterday';
+  return new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function buildDuet(w) {
+  const list = w.items.length
+    ? el('ul', { class: 'duet-list' }, ...[...w.items].reverse().map((q) => el('li', { class: `duet-item${q.answer ? ' answered' : ''}` },
+      el('div', { class: 'duet-q' },
+        el('p', { class: 'duet-q-text', text: q.text }),
+        el('button', { class: 'todo-del', type: 'button', 'aria-label': `Delete question: ${q.text}`, text: '✕', onclick: () => runActions([{ op: 'duet_remove', match: q.text }]) })),
+      q.answer
+        ? el('p', { class: 'duet-a', text: q.answer })
+        : el('p', { class: 'duet-wait', 'data-asked': q.asked, text: `Waiting for Duet · asked ${ago(q.asked)}` }),
+    )))
+    : el('p', { class: 'todo-empty', text: 'Say “Duet,” then a question or request. Answers show up here.' });
+  return card(w, 'duet-card', body(list),
+    el('p', { class: 'duet-foot', text: sheet ? 'Duet answers when it checks your Google Sheet.' : 'Connect the Google Sheet in Settings so Duet can see these.' }));
+}
+
+const BUILDERS = { clock: buildClock, timer: buildTimer, note: buildNote, checklist: buildChecklist, weather: buildWeather, todo: buildTodo, duet: buildDuet };
 
 function render() {
   // Never rebuild the cards mid-drag (a sheet sync or timer could fire); do it once the card has landed.
@@ -391,6 +419,10 @@ function tick() {
   const now = new Date();
   for (const node of document.querySelectorAll('[data-clock-time]')) node.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   for (const node of document.querySelectorAll('[data-clock-date]')) node.textContent = now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+  for (const node of document.querySelectorAll('[data-asked]')) {
+    const text = `Waiting for Duet · asked ${ago(node.dataset.asked)}`;
+    if (node.textContent !== text) node.textContent = text;
+  }
 
   for (const w of widgets) {
     if (w.type === 'timer') {
@@ -418,7 +450,7 @@ function tick() {
 const SHEET_POLL_MS = 60_000;
 let sheet = null;
 let pending = [];
-try { pending = JSON.parse(store.get('vd:sheet-pending', '[]')).filter(isTodoAction); } catch { pending = []; }
+try { pending = JSON.parse(store.get('vd:sheet-pending', '[]')).filter(isSheetAction); } catch { pending = []; }
 let syncing = false;
 let syncAgain = false;
 let syncStatus = { state: 'off', text: '' };
@@ -441,22 +473,30 @@ function runActions(actions) {
   widgets = applyActions(widgets, actions);
   save();
   render();
-  const todoOps = (actions || []).filter(isTodoAction);
-  if (sheet && todoOps.length) {
-    pending.push(...todoOps);
+  const sheetOps = (actions || []).filter(isSheetAction);
+  if (sheet && sheetOps.length) {
+    pending.push(...sheetOps);
     savePending();
     syncSheet();
   }
 }
 
-function applySheetItems(items) {
+function applySheetState({ items, questions }) {
+  let changed = false;
   const todo = widgets.find((w) => w.type === 'todo');
-  if (!todo) return; // the card was removed on this iPad; don't bring it back on a poll
-  const key = (list) => JSON.stringify(list.map((i) => [i.text, i.done]));
-  if (key(todo.items) === key(items)) return;
-  todo.items = items;
-  save();
-  render();
+  const todoKey = (list) => JSON.stringify(list.map((i) => [i.text, i.done]));
+  if (todo && todoKey(todo.items) !== todoKey(items)) { todo.items = items; changed = true; } // a removed card stays removed
+
+  const duet = widgets.find((w) => w.type === 'duet');
+  const qKey = (list) => JSON.stringify(list.map((q) => [q.text, q.answer]));
+  if (duet && qKey(duet.items) !== qKey(questions)) {
+    const waiting = new Set(duet.items.filter((q) => !q.answer).map((q) => q.text));
+    const fresh = questions.filter((q) => q.answer && waiting.has(q.text));
+    duet.items = questions;
+    changed = true;
+    if (fresh.length) setTranscript(fresh.length === 1 ? `Duet answered: “${fresh[0].text}”` : `Duet answered ${fresh.length} questions.`);
+  }
+  if (changed) { save(); render(); }
 }
 
 async function syncSheet() {
@@ -467,11 +507,11 @@ async function syncSheet() {
   const batch = pending.slice(0, 20);
   setSyncStatus('busy');
   try {
-    const items = await client.sync(batch);
+    const state = await client.sync(batch);
     if (client !== sheet) return; // disconnected while waiting
     pending = pending.slice(batch.length);
     savePending();
-    if (!pending.length) applySheetItems(items); // with changes still queued, the sheet's copy is out of date
+    if (!pending.length) applySheetState(state); // with changes still queued, the sheet's copy is out of date
     setSyncStatus('ok');
   } catch (err) {
     setSyncStatus('error', err.message);
@@ -486,12 +526,17 @@ async function syncSheet() {
 /** First connection: keep this iPad's unfinished tasks by copying the ones the sheet doesn't have. */
 async function connectSheet() {
   const local = (widgets.find((w) => w.type === 'todo')?.items || []).filter((i) => !i.done).map((i) => i.text);
+  const localQs = (widgets.find((w) => w.type === 'duet')?.items || []).filter((q) => !q.answer).map((q) => q.text);
   if (!widgets.some((w) => w.type === 'todo')) { widgets = applyActions(widgets, [{ op: 'add', widget: { type: 'todo' } }]); save(); render(); }
   setSyncStatus('busy');
   try {
-    const have = new Set((await sheet.sync([])).map((i) => i.text.toLowerCase()));
+    const remote = await sheet.sync([]);
+    const have = new Set(remote.items.map((i) => i.text.toLowerCase()));
     const missing = local.filter((t) => !have.has(t.toLowerCase()));
     if (missing.length) { pending.push({ op: 'todo_add', items: missing }); savePending(); }
+    const asked = new Set(remote.questions.map((q) => q.text.toLowerCase()));
+    for (const text of localQs.filter((t) => !asked.has(t.toLowerCase()))) pending.push({ op: 'duet_ask', text });
+    savePending();
     setTranscript(missing.length ? `Connected. Copied ${missing.length} task${missing.length > 1 ? 's' : ''} from this iPad to the sheet.` : 'Connected to the Google Sheet.');
   } catch (err) {
     setSyncStatus('error', err.message);
@@ -603,7 +648,7 @@ $('#settings-form').addEventListener('submit', (e) => {
 // ---------- commands ----------
 async function interpret(text) {
   const apiKey = getKey();
-  if (apiKey) {
+  if (apiKey && !isDuetCommand(text)) { // "Duet, …" always goes to Duet (your subscription), never the API
     try {
       return await askClaude({ apiKey, model: getModel(), text, widgets });
     } catch (err) {
@@ -622,7 +667,8 @@ async function sendCommand(text) {
   try {
     const { reply, actions } = await interpret(text);
     runActions(actions);
-    setTranscript(reply);
+    const askedDuet = actions.some((a) => a.op === 'duet_ask');
+    setTranscript(askedDuet && !sheet ? 'Saved on the Duet card. Connect the Google Sheet in Settings so Duet can see it.' : reply);
   } catch (err) {
     setTranscript(`Something went wrong: ${err.message}`);
   } finally {

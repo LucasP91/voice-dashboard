@@ -5,7 +5,8 @@
 // in-memory sheet, so sync can be tested without a Google account:
 //   Settings → Web app URL: http://localhost:5180/mock-sheet   Secret: test-secret
 //   PUT  /mock-sheet/rows     body: [["Task","Done"],["Buy milk",false]]   (pretend to be Claude Duet editing the sheet)
-//   GET  /mock-sheet/rows     current rows
+//   GET  /mock-sheet/rows     current rows (add ?tab=Questions for the Duet questions tab)
+//   PUT  /mock-sheet/rows?tab=Questions   body: rows   (pretend to be Duet answering questions)
 //   POST /mock-sheet/offline  body: {"on":true}   (simulate the sheet being unreachable)
 import http from 'node:http';
 import fs from 'node:fs';
@@ -25,16 +26,24 @@ const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', 
 const json = (res, status, data) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
 
 http.createServer(async (req, res) => {
-  const name = new URL(req.url, 'http://x').pathname.slice(1) || 'index.html';
+  const url = new URL(req.url, 'http://x');
+  const name = url.pathname.slice(1) || 'index.html';
+  const tab = url.searchParams.get('tab');
 
   if (name === 'mock-sheet' && req.method === 'POST') {
     const body = await readBody(req);
     if (offline) return json(res, 503, { error: 'offline' });
     return json(res, 200, bridge.post(body));
   }
-  if (name === 'mock-sheet/rows' && req.method === 'GET') return json(res, 200, bridge.data);
+  if (name === 'mock-sheet/rows' && req.method === 'GET') return json(res, 200, tab ? bridge.tab(tab) : bridge.data);
   if (name === 'mock-sheet/rows' && req.method === 'PUT') {
-    bridge = loadBridge({ rows: JSON.parse(await readBody(req)) });
+    const rows = JSON.parse(await readBody(req));
+    if (tab === 'Questions') {
+      const current = bridge.tab('Questions');
+      if (current) { current.length = 0; current.push(...rows); } else bridge = loadBridge({ rows: bridge.data, questions: rows });
+      return json(res, 200, bridge.tab('Questions'));
+    }
+    bridge = loadBridge({ rows, questions: bridge.tab('Questions') });
     return json(res, 200, bridge.data);
   }
   if (name === 'mock-sheet/offline' && req.method === 'POST') {

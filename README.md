@@ -21,6 +21,15 @@ A voice-controlled touch dashboard for an iPad, hosted as a static site on GitHu
 | "Set a timer for 10 minutes", "Weather in London", "Add a clock", "Note: …" | Other widgets |
 | "Remove the clock", "Clear the dashboard" | Removes widgets |
 | "Move the clock to the top", "Put the to-do list at the end", "Move the weather left" | Reorders cards |
+| **"Duet, …"** / "Hey Duet, …" (anything after it) | Leaves a question or request for Claude Duet; the answer appears on the Duet card |
+
+Cards can also be moved by dragging the ⠿ handle, or by tapping it for ◀ ▶ buttons.
+
+### "Duet, …"
+
+Like talking to Siri: start with **"Duet,"** and the rest goes to Claude Duet through the Google Sheet's **Questions** tab.
+Duet runs on your Claude subscription, so this never uses API tokens. It isn't instant: Duet answers when it checks the
+sheet (on its schedule, or when you tell it to in the Duet app), and the answer then shows on the dashboard's Duet card.
 
 ## Google Sheet sync (Claude Duet)
 
@@ -33,6 +42,12 @@ The sheet looks like this. Row 1 is the header; Done can be a checkbox, `TRUE`, 
 |---|---|
 | Buy milk | ☐ |
 | Call the dentist | ☑ |
+
+A second tab, **Questions**, is created by the script and holds what you say after "Duet,":
+
+| Question | Asked | Answer | Answered |
+|---|---|---|---|
+| What should I cook tonight? | 2026-11-21 18:02 | A stir-fry with the leftover chicken… | 2026-11-21 19:30 |
 
 ### Setup (about 5 minutes, once)
 
@@ -58,10 +73,18 @@ Keep the URL and secret private; to revoke them, run `setup` after deleting the 
 
 Send Duet something like:
 
-> My dashboard's to-do list is the Google Sheet **"Dashboard To-do"**. Row 1 is the header (Task, Done); each task is one row
-> with its text in column A and a checkbox in column B. When I ask you to add a to-do, append a row with the Done box unticked.
-> To finish one, tick its box; to delete one, delete the row. Don't change the header or other columns, and only add
-> tasks you find in my email or calendar after I say yes.
+> My dashboard uses the Google Sheet **"Dashboard To-do"**.
+>
+> **To-do tab (the first tab):** row 1 is the header (Task, Done); each task is one row with its text in column A and a
+> checkbox in column B. When I ask you to add a to-do, append a row with the Done box unticked. To finish one, tick its box;
+> to delete one, delete the row. Don't change the header or other columns, and only add tasks you find in my email or
+> calendar after I say yes.
+>
+> **Questions tab:** these are things I said to you from my dashboard. Whenever you check in, and whenever I ask you to,
+> look for rows with an empty **Answer** (column C). Answer each one as if I'd asked you directly, write the answer in
+> column C, and put the date and time in **Answered** (column D). Keep answers short enough to read on an iPad (a few
+> sentences or a short list). If a row asks you to do something, do it the way you normally would, asking me first before
+> anything consequential, and use the Answer to say what you did. Don't edit the Question or Asked columns.
 
 ## Develop
 

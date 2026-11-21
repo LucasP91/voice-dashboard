@@ -286,3 +286,16 @@ html.is-dragging, html.is-dragging * { -webkit-user-select: none; user-select: n
 .move-buttons { flex: 1; display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: calc(var(--space-3) * -1); }
 .move-buttons .btn { min-height: var(--tap); padding: 0 var(--space-4); }
 .move-btn { min-width: var(--tap); font-size: 1.1rem; }
+
+/* ---------- Duet card ("Duet, …" questions and answers) ---------- */
+.duet-card { grid-row: span 2; }
+.duet-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); max-height: 420px; overflow-y: auto; overscroll-behavior: contain; }
+.duet-item { padding: var(--space-3) 0 var(--space-3) var(--space-3); border-left: 3px solid var(--color-border); }
+.duet-item.answered { border-left-color: var(--color-primary); }
+.duet-q { display: flex; align-items: flex-start; gap: var(--space-2); }
+.duet-q-text { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; padding-top: var(--space-2); }
+.duet-q .todo-del { margin-top: calc(var(--space-1) * -1); }
+.duet-a { margin-top: var(--space-1); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+.duet-wait { margin-top: var(--space-1); color: var(--color-text-muted); font-size: 0.9rem; }
+.duet-foot { color: var(--color-text-muted); font-size: 0.8125rem; }
+@media (max-width: 560px) { .duet-card { grid-row: auto; } }
