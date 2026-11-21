@@ -426,10 +426,25 @@ form.addEventListener('submit', (e) => {
 });
 
 // ---------- voice input ----------
+// iPad Safari quirks handled here: results often never arrive marked "final", and listening may not stop
+// by itself. So the latest words are kept, listening stops after a short pause, and whatever was heard is sent.
+// Add ?debug to the address to see every speech event on screen.
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const SILENCE_MS = 1500;   // stop this long after the last words
+const MAX_LISTEN_MS = 15000;
+const DEBUG_VOICE = /[?&]debug\b/.test(location.search);
 let recognizer = null;
 let listening = false;
 let heard = '';
+let gotError = false;
+let silenceTimer = 0;
+let maxTimer = 0;
+
+function voiceLog(msg) {
+  if (!DEBUG_VOICE) return;
+  const log = $('#voice-log') || document.body.appendChild(el('pre', { id: 'voice-log', class: 'voice-log' }));
+  log.textContent = `${new Date().toLocaleTimeString()}  ${msg}\n${log.textContent}`.slice(0, 4000);
+}
 
 function setListening(on) {
   listening = on;
@@ -437,9 +452,16 @@ function setListening(on) {
   mic.setAttribute('aria-label', on ? 'Stop listening' : 'Start listening');
 }
 
+function stopListening() {
+  clearTimeout(silenceTimer);
+  clearTimeout(maxTimer);
+  try { recognizer?.stop(); } catch { /* already stopped */ }
+}
+
 function setupVoice() {
+  voiceLog(`speech API: ${Recognition ? 'yes' : 'no'} · home screen app: ${isHomeScreenApp} · ${navigator.userAgent}`);
   if (!Recognition) {
-    // No web speech API here (older iPadOS, or a Home Screen web app). The mic button then opens the
+    // No web speech API here (older iPadOS, or some Home Screen web apps). The mic button then opens the
     // keyboard instead, whose own dictation key works everywhere.
     mic.setAttribute('aria-label', 'Dictate with the keyboard');
     return;
@@ -448,36 +470,57 @@ function setupVoice() {
   recognizer.lang = navigator.language || 'en-US';
   recognizer.interimResults = true;
   recognizer.continuous = false;
+  recognizer.maxAlternatives = 1;
 
-  recognizer.onstart = () => { heard = ''; setListening(true); setTranscript('Listening…'); };
+  for (const name of ['audiostart', 'soundstart', 'speechstart', 'speechend', 'soundend', 'audioend', 'nomatch']) {
+    recognizer.addEventListener(name, () => voiceLog(name));
+  }
+
+  recognizer.onstart = () => {
+    heard = '';
+    gotError = false;
+    setListening(true);
+    setTranscript('Listening… speak now, or tap the mic to stop.');
+    voiceLog('start');
+    clearTimeout(maxTimer);
+    maxTimer = setTimeout(stopListening, MAX_LISTEN_MS);
+  };
   recognizer.onresult = (e) => {
-    let finalText = '', interim = '';
-    for (let i = 0; i < e.results.length; i++) {
-      const r = e.results[i];
-      if (r.isFinal) finalText += r[0].transcript; else interim += r[0].transcript;
-    }
-    heard = finalText || heard;
-    setTranscript(`“${(finalText || interim).trim()}”`);
+    let text = '';
+    for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
+    text = text.trim();
+    const isFinal = !!e.results[e.results.length - 1]?.isFinal;
+    voiceLog(`result${isFinal ? ' (final)' : ''}: ${text}`);
+    if (text) { heard = text; setTranscript(`“${text}”`); }
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(stopListening, isFinal ? 300 : SILENCE_MS);
   };
   recognizer.onerror = (e) => {
-    setListening(false);
+    voiceLog(`error: ${e.error}${e.message ? ` (${e.message})` : ''}`);
+    if (e.error === 'aborted') return; // we stopped it ourselves
+    gotError = true;
     const messages = {
-      'not-allowed': 'Microphone is blocked. Allow it in Settings → Safari → Microphone.',
-      'service-not-allowed': 'Speech recognition is turned off. Enable Dictation in Settings → General → Keyboard.',
-      'no-speech': 'I didn’t hear anything. Tap the mic and try again.',
+      'not-allowed': 'The microphone was blocked. If you just allowed it, tap the mic again. Otherwise allow it in Settings → Safari → Microphone.',
+      'service-not-allowed': 'Speech recognition is off. Turn on Settings → General → Keyboard → Enable Dictation, then try again.',
+      'no-speech': 'I didn’t hear anything. Tap the mic and speak straight away.',
       'audio-capture': 'No microphone found.',
+      network: 'Speech recognition needs an internet connection.',
     };
-    setTranscript(messages[e.error] || `Voice input stopped (${e.error}).`);
+    setTranscript(messages[e.error] || `Voice input stopped (${e.error}). Tap the mic to try again.`);
   };
   recognizer.onend = () => {
+    clearTimeout(silenceTimer);
+    clearTimeout(maxTimer);
+    voiceLog(`end · heard: "${heard}"`);
     setListening(false);
     const text = heard.trim();
     heard = '';
     if (text) sendCommand(text);
+    else if (!gotError) setTranscript('I didn’t catch that. Tap the mic and speak straight away.');
   };
 }
 
-const isHomeScreenApp = navigator.standalone === true || window.matchMedia?.('(display-mode: standalone)').matches;
+const isHomeScreenApp = navigator.standalone === true || !!window.matchMedia?.('(display-mode: standalone)').matches;
 
 mic.addEventListener('click', () => {
   if (!recognizer) {
@@ -487,8 +530,19 @@ mic.addEventListener('click', () => {
       : 'Tap 🎤 on the keyboard, speak, then tap Send.');
     return;
   }
-  if (listening) { recognizer.stop(); return; }
-  try { recognizer.start(); } catch { /* already starting */ }
+  if (listening) { voiceLog('tap: stop'); stopListening(); return; }
+  voiceLog('tap: start');
+  setTranscript('Starting the mic…');
+  try {
+    recognizer.start();
+  } catch (err) {
+    // Safari can still be finishing the last session; reset it and try once more.
+    voiceLog(`start failed: ${err.name}`);
+    try { recognizer.abort(); } catch { /* ignore */ }
+    setTimeout(() => {
+      try { recognizer.start(); } catch { setTranscript('The mic is busy. Tap it again in a moment.'); }
+    }, 300);
+  }
 });
 
 // ---------- boot ----------
