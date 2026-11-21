@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyActions, localParse, normalizeAll, parseClaudeReply, askClaude } from '../logic.js';
+import { applyActions, localParse, normalizeAll, bridgeClient } from '../logic.js';
 
 const run = (widgets, text) => { const r = localParse(text, widgets); return { ...r, widgets: applyActions(widgets, r.actions) }; };
 const todoOf = (w) => w.find((x) => x.type === 'todo');
@@ -49,20 +49,6 @@ test('only one to-do list, and bad input is dropped', () => {
   assert.equal(out[1].text.length, 2000);
 });
 
-test('parses a Claude reply wrapped in prose', () => {
-  const r = parseClaudeReply('Sure!\n{"reply":"Done","actions":[{"op":"todo_add","items":["a"]}]}');
-  assert.equal(r.actions[0].op, 'todo_add');
-  assert.throws(() => parseClaudeReply('no json here'));
-});
-
-test('askClaude sends the browser-access header and maps errors', async () => {
-  let seen;
-  const ok = async (url, opts) => { seen = opts; return { ok: true, json: async () => ({ content: [{ type: 'text', text: '{"reply":"ok","actions":[]}' }] }) }; };
-  await askClaude({ apiKey: 'k', model: 'm', text: 'hi', widgets: [], fetchImpl: ok });
-  assert.equal(seen.headers['anthropic-dangerous-direct-browser-access'], 'true');
-  await assert.rejects(askClaude({ apiKey: 'k', model: 'm', text: 'hi', widgets: [], fetchImpl: async () => ({ ok: false, status: 401 }) }), /rejected the API key/);
-});
-
 test('move: actions reorder and clamp, unknown ids are ignored', () => {
   const w = ['a', 'b', 'c'].map((id) => ({ id, type: 'note', title: id, text: id }));
   const order = (list) => list.map((x) => x.id).join('');
@@ -99,7 +85,7 @@ test('"Duet, …" is sent to Duet, like a wake word', () => {
   assert.equal(localParse('Duet, add milk to my to-do list', []).actions[0].op, 'duet_ask');
   // words merely containing "duet" don't trigger it
   assert.notEqual(localParse('add duet practice to my to-do list', []).actions[0]?.op, 'duet_ask');
-  assert.match(localParse('what is the capital of peru', []).reply, /Start with “Duet,”/);
+  assert.match(localParse('what is the capital of peru', []).reply, /“Claude,” for a quick answer, “Duet,”/);
 });
 
 test('duet actions keep one Duet card with the newest 20 questions', () => {
@@ -112,4 +98,56 @@ test('duet actions keep one Duet card with the newest 20 questions', () => {
   w = applyActions(w, [{ op: 'duet_remove', match: 'q24' }, { op: 'add', widget: { type: 'duet' } }]);
   assert.equal(w.filter((x) => x.type === 'duet').length, 1);
   assert.equal(w.find((x) => x.type === 'duet').items.at(-1).text, 'Q23');
+});
+
+test('"Claude, …" asks Claude on the computer, like a wake word', () => {
+  for (const said of ['Claude, how long do I boil an egg?', 'claude how long do I boil an egg?', 'Hey Claude, how long do I boil an egg?', 'Cloud, how long do I boil an egg?', 'Clawed how long do I boil an egg?']) {
+    const r = localParse(said, []);
+    assert.equal(r.actions.length, 1, said);
+    assert.equal(r.actions[0].op, 'claude_ask');
+    assert.equal(r.actions[0].text, 'How long do I boil an egg?');
+    assert.ok(!Number.isNaN(Date.parse(r.actions[0].asked)));
+  }
+  assert.deepEqual(localParse('Claude', []).actions, []);
+  assert.notEqual(localParse('add cloudberries to my to-do list', []).actions[0]?.op, 'claude_ask');
+  assert.equal(localParse('Duet, ask Claude something', []).actions[0].op, 'duet_ask');
+});
+
+test('claude actions: ask, answer, fail, retry, remove (matched by asked time)', () => {
+  let w = applyActions([], [{ op: 'claude_ask', text: 'One?', asked: 't1' }, { op: 'claude_ask', text: 'Two?', asked: 't2' }]);
+  assert.deepEqual(w.map((x) => x.type), ['claude']);
+  const items = () => w[0].items;
+  w = applyActions(w, [{ op: 'claude_answer', asked: 't1', answer: ' Yes. ' }, { op: 'claude_answer', asked: 't2', error: 'Can’t reach your computer.' }]);
+  assert.equal(items()[0].answer, 'Yes.');
+  assert.ok(items()[0].answered);
+  assert.equal(items()[1].error, 'Can’t reach your computer.');
+  w = normalizeAll(JSON.parse(JSON.stringify(w))); // survives saving
+  assert.equal(items()[1].error, 'Can’t reach your computer.');
+  w = applyActions(w, [{ op: 'claude_retry', asked: 't2' }]);
+  assert.equal(items()[1].error, undefined);
+  assert.equal(items()[1].answer, '');
+  w = applyActions(w, [{ op: 'claude_answer', asked: 'nope', answer: 'x' }, { op: 'claude_remove', asked: 't1' }]);
+  assert.deepEqual(items().map((q) => q.text), ['Two?']);
+  w = applyActions(w, [{ op: 'add', widget: { type: 'claude' } }]);
+  assert.equal(w.length, 1);
+});
+
+test('bridge client: checks the address, sends a simple text body, maps errors', async () => {
+  assert.throws(() => bridgeClient({ url: 'http://192.168.1.5:5190', token: 't' }), /https/);
+  assert.throws(() => bridgeClient({ url: 'https://pc.tail1.ts.net', token: '' }), /token/);
+  let seen;
+  const ok = async (url, opts) => { seen = { url, opts }; return { ok: true, status: 200, json: async () => ({ answer: ' Ten minutes. ' }) }; };
+  const c = bridgeClient({ url: 'https://pc.tail1.ts.net/', token: 'tok', fetchImpl: ok });
+  const history = [1, 2, 3, 4].map((n) => ({ text: `q${n}`, answer: `a${n}`, extra: 'dropped' }));
+  assert.equal(await c.ask('How long?', history), 'Ten minutes.');
+  assert.equal(seen.url, 'https://pc.tail1.ts.net/ask');
+  assert.equal(seen.opts.headers, undefined); // no Content-Type: no CORS preflight
+  const sent = JSON.parse(seen.opts.body);
+  assert.equal(sent.token, 'tok');
+  assert.deepEqual(sent.history, [{ text: 'q2', answer: 'a2' }, { text: 'q3', answer: 'a3' }, { text: 'q4', answer: 'a4' }]);
+  const status = (code, body = {}) => bridgeClient({ url: 'http://localhost:5190', token: 't', fetchImpl: async () => ({ ok: code < 300, status: code, json: async () => body }) });
+  await assert.rejects(status(401).ping(), /rejected the token/);
+  await assert.rejects(status(429, { error: 'Busy now.' }).ask('x'), /Busy now/);
+  await assert.rejects(status(502, { error: 'Claude Code isn’t signed in' }).ask('x'), /signed in/);
+  await assert.rejects(bridgeClient({ url: 'http://localhost:5190', token: 't', fetchImpl: async () => { throw new TypeError('Load failed'); } }).ping(), /Can’t reach your computer/);
 });

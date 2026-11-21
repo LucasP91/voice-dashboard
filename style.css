@@ -312,6 +312,13 @@ html.is-dragging, html.is-dragging * { -webkit-user-select: none; user-select: n
 .duet-wait { margin-top: var(--space-1); color: var(--color-text-muted); font-size: 0.9rem; }
 .duet-foot { color: var(--color-text-muted); font-size: 0.8125rem; }
 @media (max-width: 560px) { .duet-card { grid-row: auto; } }
+/* Claude card: same layout as Duet; a failed answer gets a red edge and a retry button */
+.duet-item.failed { border-left-color: var(--color-danger); }
+.claude-error { margin-top: var(--space-1); display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); color: var(--color-danger); font-size: 0.9rem; }
+.claude-error .btn { min-height: 40px; font-size: 0.9rem; }
+.claude-thinking { animation: thinking 1.4s ease-in-out infinite; }
+@keyframes thinking { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .claude-thinking { animation: none; } }
 
 /* ---------- sheet status chip (tap to open Settings) ---------- */
 .chip-btn { font: inherit; font-size: 0.875rem; cursor: pointer; min-height: var(--tap); }

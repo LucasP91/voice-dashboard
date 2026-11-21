@@ -6,7 +6,8 @@
   "description": "Voice-controlled touch dashboard. Static site for GitHub Pages; open it in Safari on an iPad.",
   "scripts": {
     "dev": "node dev-server.mjs",
-    "test": "node --test test/logic.test.mjs test/sheet.test.mjs"
+    "test": "node --test test/logic.test.mjs test/sheet.test.mjs test/bridge.test.mjs",
+    "bridge": "node bridge/claude-bridge.mjs"
   },
   "engines": { "node": ">=20" }
 }

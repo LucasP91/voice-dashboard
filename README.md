@@ -3,9 +3,10 @@
 A voice-controlled touch dashboard for an iPad, hosted as a static site on GitHub Pages:
 **https://lucasp91.github.io/voice-dashboard/**. It uses the same Aurora background and colours as the portfolio site.
 
-- **Widgets:** to-do list, clock, timer, weather (Open-Meteo, no key), note, checklist.
+- **Widgets:** to-do list, Claude, Duet, clock, timer, weather (Open-Meteo, no key), note, checklist.
 - **Voice:** tap the mic and speak (Safari's built-in speech recognition). GitHub Pages is HTTPS, so the mic just works.
-- **Claude (optional):** Settings → paste an Anthropic API key and any request is understood. Without a key a built-in parser handles the common phrases.
+- **Claude, …:** quick answers in a few seconds from Claude Code on your computer, on your Claude subscription (no API key). See below.
+- **Commands:** a built-in parser handles the common phrases (to-dos, timers, weather, moving cards).
 - **To-do sync (optional):** connect a Google Sheet so Claude Duet can add and tick your tasks. See below.
 - **Storage:** widgets and keys live in the iPad's browser storage (`localStorage`). Nothing personal is in this repo.
 
@@ -21,6 +22,7 @@ A voice-controlled touch dashboard for an iPad, hosted as a static site on GitHu
 | "Set a timer for 10 minutes", "Weather in London", "Add a clock", "Note: …" | Other widgets |
 | "Remove the clock", "Clear the dashboard" | Removes widgets |
 | "Move the clock to the top", "Put the to-do list at the end", "Move the weather left" | Reorders cards |
+| **"Claude, …"** / "Hey Claude, …" (anything after it) | Asks Claude on your computer; the answer appears on the Claude card in a few seconds |
 | **"Duet, …"** / "Hey Duet, …" (anything after it) | Leaves a question or request for Claude Duet; the answer appears on the Duet card |
 
 Cards can also be moved by dragging the ⠿ handle, or by tapping it for ◀ ▶ buttons.
@@ -34,6 +36,36 @@ below so you can type or say the rest.
 Like talking to Siri: start with **"Duet,"** and the rest goes to Claude Duet through the Google Sheet's **Questions** tab.
 Duet runs on your Claude subscription, so this never uses API tokens. It isn't instant: Duet answers when it checks the
 sheet (on its schedule, or when you tell it to in the Duet app), and the answer then shows on the dashboard's Duet card.
+
+## Claude on your computer
+
+"Claude, …" is answered by [Claude Code](https://claude.com/claude-code) running on your computer, signed in with your
+Claude Pro/Max subscription. A small bridge (`bridge/claude-bridge.mjs`, no dependencies) passes the question to
+`claude -p` and the answer back to the dashboard. It counts toward your plan's usage limits like chatting does, never API billing:
+the bridge removes `ANTHROPIC_API_KEY` before starting Claude Code.
+
+What Claude can do from the bridge: answer and search the web. It has no other tools and no MCP servers (so not your email
+or files), and runs in an empty folder. For things that need your email or calendar, say "Duet, …" instead.
+Follow-ups work: the last three answers from the past 15 minutes are sent along.
+
+**Needs:** Node.js 20+, Claude Code signed in (the copy inside the Claude desktop app is found automatically), and the
+computer switched on with the bridge running.
+
+### Setup
+
+1. **Start the bridge.** Double-click `bridge/start-bridge.cmd` (or `npm run bridge`). It prints a **token** and listens on
+   `127.0.0.1:5190` only. The token and the model (`sonnet` by default) are kept in `%USERPROFILE%\.voice-dashboard-bridge\config.json`.
+2. **Give it an HTTPS address the iPad can reach.** The dashboard is an HTTPS page, so Safari won't let it talk to a plain
+   `http://` address on your network. [Tailscale](https://tailscale.com) (free) does this privately:
+   - Install Tailscale on the computer and the iPad and sign in to the same account on both.
+   - On the computer: `tailscale serve --bg 5190`. The first time, it gives a link to turn on HTTPS for your tailnet; open it,
+     allow, and run the command again. It prints an address like `https://my-pc.tail1234.ts.net`.
+   - Only devices signed in to your Tailscale account can open that address.
+3. **Connect the iPad.** Dashboard → **Settings → Claude on your computer**: paste the `https://….ts.net` address and the
+   token, **Save**. The chip at the top turns to **Claude ready**.
+
+To start the bridge when you log in to Windows, put a shortcut to `bridge/start-bridge.cmd` in the Startup folder
+(Win+R → `shell:startup`). `tailscale serve --bg` keeps running by itself.
 
 ## Google Sheet sync (Claude Duet)
 
@@ -102,7 +134,8 @@ Send Duet something like:
 
 ```powershell
 npm run dev    # preview at http://localhost:5180, with a mock sheet at /mock-sheet (secret: test-secret)
-npm test       # parser, actions, Apps Script and sheet-client tests
+npm test       # parser, actions, Apps Script, sheet-client and bridge tests
+npm run bridge # the Claude bridge (the dashboard on localhost can use http://127.0.0.1:5190)
 ```
 
 Pushing to `main` runs `.github/workflows/pages.yml`: the tests run, then only `index.html`, `app.js`, `logic.js` and `style.css` are published.
@@ -114,8 +147,8 @@ Pushing to `main` runs `.github/workflows/pages.yml`: the tests run, then only `
 3. Optional: Settings → Display & Brightness → Auto-Lock → Never; Accessibility → Guided Access to lock it to the dashboard.
 4. On an older iPad, switch off "Animate the background" in Settings if it runs warm.
 
-## About the keys on the iPad
+## About the secrets on the iPad
 
-The Claude key and the sheet secret are typed on the device and stored only in that browser. The Claude key goes straight to
-`api.anthropic.com` (using Anthropic's browser-access header) and the secret only to your Apps Script; neither is ever on GitHub.
-Anyone using that iPad can use them, so set a monthly spending limit on the Claude key in the Anthropic Console.
+The bridge token and the sheet secret are typed on the device and stored only in that browser. The token goes only to your
+computer (over Tailscale) and the secret only to your Apps Script; neither is ever on GitHub. Anyone using that iPad can use them.
+To change the bridge token, delete `token` from the bridge's `config.json` and restart it.

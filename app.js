@@ -1,6 +1,6 @@
 // Voice dashboard client. Static site: state lives in this device's localStorage.
 // All stored/model-provided text is inserted with textContent (never innerHTML).
-import { MAX_WIDGETS, applyActions, askClaude, isDuetCommand, isSheetAction, isTodoAction, localParse, normalizeAll, sheetClient } from './logic.js?v=__BUILD__';
+import { MAX_WIDGETS, applyActions, bridgeClient, isSheetAction, isTodoAction, localParse, normalizeAll, sheetClient } from './logic.js?v=__BUILD__';
 
 // Safari before 14 lacks replaceChildren, which every render uses.
 if (!Element.prototype.replaceChildren) {
@@ -16,8 +16,7 @@ const input = $('#command-input');
 const form = $('#command-form');
 const sendBtn = $('#send');
 
-const DEFAULT_MODEL = 'claude-sonnet-5-5';
-const EXAMPLES = ['Add milk to my to-do list', 'Duet, plan my weekend', 'Timer for 5 minutes', 'Weather in London', 'Add a clock', 'Note: call the dentist'];
+const EXAMPLES = ['Add milk to my to-do list', 'Claude, how long do I boil an egg?', 'Duet, plan my weekend', 'Timer for 5 minutes', 'Weather in London', 'Add a clock', 'Note: call the dentist'];
 const FAHRENHEIT = /^en-US/i.test(navigator.language);
 
 // ---------- storage (every access guarded: it can throw in private windows) ----------
@@ -216,13 +215,33 @@ function buildDuet(w) {
     el('p', { class: 'duet-foot', text: sheet ? 'Duet answers when it checks your Google Sheet.' : 'Connect the Google Sheet in Settings so Duet can see these.' }));
 }
 
-const BUILDERS = { clock: buildClock, timer: buildTimer, note: buildNote, checklist: buildChecklist, weather: buildWeather, todo: buildTodo, duet: buildDuet };
+function buildClaude(w) {
+  const list = w.items.length
+    ? el('ul', { class: 'duet-list' }, ...[...w.items].reverse().map((q) => el('li', { class: `duet-item${q.answer ? ' answered' : ''}${q.error ? ' failed' : ''}` },
+      el('div', { class: 'duet-q' },
+        el('p', { class: 'duet-q-text', text: q.text }),
+        el('button', { class: 'todo-del', type: 'button', 'aria-label': `Delete question: ${q.text}`, text: '✕', onclick: () => runActions([{ op: 'claude_remove', asked: q.asked }]) })),
+      q.answer
+        ? el('p', { class: 'duet-a', text: q.answer })
+        : q.error
+          ? el('div', { class: 'claude-error' },
+            el('p', { text: q.error }),
+            el('button', { class: 'btn', type: 'button', text: 'Try again', onclick: () => { runActions([{ op: 'claude_retry', asked: q.asked }]); askBridge(q.asked); } }))
+          : el('p', { class: 'duet-wait claude-thinking', text: 'Thinking…' }),
+    )))
+    : el('p', { class: 'todo-empty', text: 'Say “Claude,” then a question. The answer shows up here in a few seconds.' });
+  return card(w, 'duet-card claude-card', body(list),
+    el('p', { class: 'duet-foot', text: bridge ? 'Answered by Claude on your computer, with your Claude subscription.' : 'Set up Claude on your computer in Settings.' }));
+}
+
+const BUILDERS = { clock: buildClock, timer: buildTimer, note: buildNote, checklist: buildChecklist, weather: buildWeather, todo: buildTodo, duet: buildDuet, claude: buildClaude };
 
 // ---------- "Add a card" tray ----------
 // Cards that are ready as they are get added straight away. Cards that need words (a note, a city,
 // list items) start the command in the box below, so the keyboard or the mic can finish it.
 const CATALOG = [
   { type: 'todo', label: 'To-do list', single: true, widget: { type: 'todo' } },
+  { type: 'claude', label: 'Claude', single: true, widget: { type: 'claude' } },
   { type: 'duet', label: 'Duet', single: true, widget: { type: 'duet' } },
   { type: 'clock', label: 'Clock', widget: { type: 'clock', title: 'Clock' } },
   { type: 'timer', label: '5-minute timer', widget: { type: 'timer', title: 'Timer', seconds: 300 } },
@@ -627,30 +646,94 @@ function disconnectSheet() {
 
 $('#sheet-chip').addEventListener('click', () => $('#open-settings').click());
 
+// ---------- Claude on your computer (bridge/claude-bridge.mjs) ----------
+// "Claude, …" goes to Claude Code on the computer, signed in with the Claude subscription. Answers take seconds.
+const BRIDGE_PING_MS = 120_000;
+let bridge = null;
+let bridgeStatus = { state: 'off', text: '' };
+
+function getBridgeConfig() { try { return JSON.parse(store.get('vd:bridge', 'null')); } catch { return null; } }
+
+function setBridgeStatus(state, text = '') {
+  bridgeStatus = { state, text };
+  syncChip();
+}
+
+async function pingBridge() {
+  if (!bridge) { setBridgeStatus('off'); return; }
+  const client = bridge;
+  if (bridgeStatus.state !== 'ok') setBridgeStatus('busy');
+  try {
+    await client.ping();
+    if (client === bridge) setBridgeStatus('ok');
+  } catch (err) {
+    if (client === bridge) setBridgeStatus('error', err.message);
+  }
+}
+
+/** Sends the question asked at `asked` to the computer and puts the answer (or the problem) on the Claude card. */
+async function askBridge(asked) {
+  const items = widgets.find((w) => w.type === 'claude')?.items || [];
+  const q = items.find((x) => x.asked === asked);
+  if (!q) return;
+  if (!bridge) {
+    runActions([{ op: 'claude_answer', asked, error: 'Set up Claude on your computer in Settings first.' }]);
+    setTranscript('Set up Claude on your computer in Settings, or start with “Duet,” instead.');
+    return;
+  }
+  // the last few answered questions from the past 15 minutes, so a follow-up like "and for 4 people?" makes sense
+  const since = Date.now() - 15 * 60_000;
+  const history = items.filter((x) => x.answer && x.asked < asked && Date.parse(x.asked) > since).slice(-3);
+  try {
+    const answer = await bridge.ask(q.text, history);
+    runActions([{ op: 'claude_answer', asked, answer }]);
+    setBridgeStatus('ok');
+    setTranscript(`Claude: ${answer.length > 140 ? `${answer.slice(0, 140)}…` : answer}`);
+  } catch (err) {
+    runActions([{ op: 'claude_answer', asked, error: err.message }]);
+    if (/reach|token/i.test(err.message)) setBridgeStatus('error', err.message);
+    setTranscript(err.message);
+  }
+}
+
+function disconnectBridge() {
+  bridge = null;
+  store.del('vd:bridge');
+  setBridgeStatus('off');
+  render();
+}
+
 // ---------- settings ----------
 const dialog = $('#settings');
-const keyInput = $('#api-key');
-const modelInput = $('#model');
 const auroraToggle = $('#aurora-toggle');
-const getKey = () => store.get('vd:key', '');
-const getModel = () => store.get('vd:model', '') || DEFAULT_MODEL;
+const bridgeUrlInput = $('#bridge-url');
+const bridgeTokenInput = $('#bridge-token');
+const bridgeHint = $('#bridge-hint');
+store.del('vd:key'); // the API-key option is gone (subscription only); don't keep an old key around
+store.del('vd:model');
 
 function applyAurora() { document.documentElement.dataset.aurora = store.get('vd:aurora', 'on'); }
 
+/** Top-bar chip: can "Claude, …" reach the computer? Tapping it opens Settings. */
 function syncChip() {
   const chip = $('#ai-chip');
-  const ai = !!getKey();
-  chip.textContent = ai ? 'Claude connected' : 'Built-in commands';
-  chip.dataset.state = ai ? 'ai' : 'local';
+  const { state, text } = bridgeStatus;
+  chip.dataset.state = state;
+  chip.textContent = { off: 'Claude: not set up', ok: 'Claude ready', busy: 'Claude: connecting…', error: '⚠ Claude offline' }[state];
+  chip.setAttribute('aria-label', `${chip.textContent}${state === 'error' ? `: ${text.replace(/.$/, '')}` : ''}. Open settings.`);
+  chip.title = state === 'error' ? text : '';
 }
+$('#ai-chip').addEventListener('click', () => $('#open-settings').click());
 
 const sheetUrlInput = $('#sheet-url');
 const sheetSecretInput = $('#sheet-secret');
 const sheetHint = $('#sheet-hint');
 
 $('#open-settings').addEventListener('click', () => {
-  keyInput.value = getKey();
-  modelInput.value = getModel();
+  const bcfg = getBridgeConfig();
+  bridgeUrlInput.value = bcfg?.url || '';
+  bridgeTokenInput.value = bcfg?.token || '';
+  bridgeHint.textContent = bridgeStatus.state === 'error' ? bridgeStatus.text : '';
   auroraToggle.checked = store.get('vd:aurora', 'on') !== 'off';
   const cfg = getSheetConfig();
   sheetUrlInput.value = cfg?.url || '';
@@ -675,7 +758,12 @@ $('#settings-x').addEventListener('click', closeSettings);
 $('#settings-close').addEventListener('click', closeSettings);
 dialog.addEventListener('click', (e) => { if (e.target === dialog) closeSettings(); }); // tap outside the panel
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !nativeDialog && dialog.hasAttribute('open')) closeSettings(); });
-$('#clear-key').addEventListener('click', () => { store.del('vd:key'); keyInput.value = ''; syncChip(); setTranscript('Claude key removed.'); });
+$('#disconnect-bridge').addEventListener('click', () => {
+  bridgeUrlInput.value = '';
+  bridgeTokenInput.value = '';
+  disconnectBridge();
+  bridgeHint.textContent = 'Disconnected. “Duet,” still works through the sheet.';
+});
 $('#disconnect-sheet').addEventListener('click', () => {
   sheetUrlInput.value = '';
   sheetSecretInput.value = '';
@@ -685,6 +773,17 @@ $('#disconnect-sheet').addEventListener('click', () => {
 $('#settings-form').addEventListener('submit', (e) => {
   e.preventDefault(); // Save is the only submit button; we close the panel ourselves
   sheetHint.textContent = '';
+  bridgeHint.textContent = '';
+
+  // The computer bridge: check the details first, so a typo keeps the dialog open with the reason.
+  const bUrl = bridgeUrlInput.value.trim();
+  const bToken = bridgeTokenInput.value.trim();
+  const bOld = getBridgeConfig();
+  const bridgeChanged = bUrl !== (bOld?.url || '') || bToken !== (bOld?.token || '');
+  let newBridge = null;
+  if (bridgeChanged && (bUrl || bToken)) {
+    try { newBridge = bridgeClient({ url: bUrl, token: bToken }); } catch (err) { bridgeHint.textContent = err.message; return; }
+  }
 
   // Check the sheet details first, so a typo keeps the dialog open with the reason.
   const url = sheetUrlInput.value.trim();
@@ -695,7 +794,6 @@ $('#settings-form').addEventListener('submit', (e) => {
     try {
       sheet = sheetClient({ url, secret });
     } catch (err) {
-      e.preventDefault();
       sheetHint.textContent = err.message;
       return;
     }
@@ -707,40 +805,37 @@ $('#settings-form').addEventListener('submit', (e) => {
     disconnectSheet();
   }
 
-  const key = keyInput.value.trim();
-  if (key) store.set('vd:key', key); else store.del('vd:key');
-  store.set('vd:model', modelInput.value.trim() || DEFAULT_MODEL);
+  if (newBridge) {
+    bridge = newBridge;
+    store.set('vd:bridge', JSON.stringify({ url: bUrl, token: bToken }));
+    setBridgeStatus('busy');
+    bridge.ping().then(
+      () => { if (bridge === newBridge) { setBridgeStatus('ok'); setTranscript('Connected to Claude on your computer. Try “Claude, …”'); render(); } },
+      (err) => { if (bridge === newBridge) { setBridgeStatus('error', err.message); setTranscript(`Couldn’t reach your computer: ${err.message}`); } },
+    );
+    render();
+  } else if (bridgeChanged) {
+    disconnectBridge();
+  }
+
   store.set('vd:aurora', auroraToggle.checked ? 'on' : 'off');
   applyAurora();
-  syncChip();
-  if (!sheetChanged) setTranscript(key ? 'Settings saved.' : 'Settings saved. Using built-in commands.');
+  if (!sheetChanged && !newBridge) setTranscript('Settings saved.');
   closeSettings();
 });
 
 // ---------- commands ----------
-async function interpret(text) {
-  const apiKey = getKey();
-  if (apiKey && !isDuetCommand(text)) { // "Duet, …" always goes to Duet (your subscription), never the API
-    try {
-      return await askClaude({ apiKey, model: getModel(), text, widgets });
-    } catch (err) {
-      const fallback = localParse(text, widgets);
-      return { ...fallback, reply: `${err.message} ${fallback.actions.length ? fallback.reply : 'Using built-in commands: ' + fallback.reply}` };
-    }
-  }
-  return localParse(text, widgets);
-}
-
 async function sendCommand(text) {
   text = text.trim();
   if (!text) return;
   setTranscript(`“${text}”`);
   sendBtn.disabled = true;
   try {
-    const { reply, actions } = await interpret(text);
+    const { reply, actions } = localParse(text, widgets);
     runActions(actions);
     const askedDuet = actions.some((a) => a.op === 'duet_ask');
     setTranscript(askedDuet && !sheet ? 'Saved on the Duet card. Connect the Google Sheet in Settings so Duet can see it.' : reply);
+    for (const a of actions) if (a.op === 'claude_ask') askBridge(a.asked); // not awaited: other commands keep working meanwhile
   } catch (err) {
     setTranscript(`Something went wrong: ${err.message}`);
   } finally {
@@ -884,7 +979,7 @@ async function keepAwake() {
   try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch { /* not allowed right now */ }
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { keepAwake(); syncSheet(); }
+  if (document.visibilityState === 'visible') { keepAwake(); syncSheet(); pingBridge(); }
 });
 
 applyAurora();
@@ -893,7 +988,13 @@ syncSheetChip();
 setupVoice();
 keepAwake();
 try { const cfg = getSheetConfig(); if (cfg) sheet = sheetClient(cfg); } catch { store.del('vd:sheet'); }
+try { const cfg = getBridgeConfig(); if (cfg) bridge = bridgeClient(cfg); } catch { store.del('vd:bridge'); }
+// A question still "thinking" after a reload lost its answer: offer to ask again.
+const lost = (widgets.find((w) => w.type === 'claude')?.items || []).filter((q) => !q.answer && !q.error);
+if (lost.length) widgets = applyActions(widgets, lost.map((q) => ({ op: 'claude_answer', asked: q.asked, error: 'No answer arrived (the dashboard was reloaded).' })));
 render();
+pingBridge();
+setInterval(() => { if (document.visibilityState === 'visible') pingBridge(); }, BRIDGE_PING_MS);
 setInterval(tick, 1000);
 syncSheet();
 setInterval(() => { if (document.visibilityState === 'visible') syncSheet(); }, SHEET_POLL_MS);
