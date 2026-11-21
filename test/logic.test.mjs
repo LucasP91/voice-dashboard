@@ -62,3 +62,28 @@ test('askClaude sends the browser-access header and maps errors', async () => {
   assert.equal(seen.headers['anthropic-dangerous-direct-browser-access'], 'true');
   await assert.rejects(askClaude({ apiKey: 'k', model: 'm', text: 'hi', widgets: [], fetchImpl: async () => ({ ok: false, status: 401 }) }), /rejected the API key/);
 });
+
+test('move: actions reorder and clamp, unknown ids are ignored', () => {
+  const w = ['a', 'b', 'c'].map((id) => ({ id, type: 'note', title: id, text: id }));
+  const order = (list) => list.map((x) => x.id).join('');
+  assert.equal(order(applyActions(w, [{ op: 'move', id: 'c', to: 'first' }])), 'cab');
+  assert.equal(order(applyActions(w, [{ op: 'move', id: 'a', to: 'last' }])), 'bca');
+  assert.equal(order(applyActions(w, [{ op: 'move', id: 'b', to: 'earlier' }])), 'bac');
+  assert.equal(order(applyActions(w, [{ op: 'move', id: 'a', to: 'earlier' }])), 'abc'); // already first
+  assert.equal(order(applyActions(w, [{ op: 'move', id: 'a', to: 1 }])), 'bac');
+  assert.equal(order(applyActions(w, [{ op: 'move', id: 'a', to: 99 }])), 'bca');
+  assert.equal(order(applyActions(w, [{ op: 'move', id: 'zz', to: 'first' }, { op: 'move', id: 'b', to: 'nonsense' }])), 'abc');
+});
+
+test('move: voice phrases', () => {
+  let w = run([], 'add a clock').widgets;
+  w = run(w, 'weather in london').widgets;
+  w = run(w, 'add milk to my to-do list').widgets;
+  const types = (list) => list.map((x) => x.type).join(',');
+  assert.equal(types(w), 'clock,weather,todo');
+  assert.equal(types(run(w, 'move the to-do list to the top').widgets), 'todo,clock,weather');
+  assert.equal(types(run(w, 'put the clock at the end').widgets), 'weather,todo,clock');
+  assert.equal(types(run(w, 'move london left').widgets), 'weather,clock,todo');
+  assert.equal(types(run(w, 'move the weather card down').widgets), 'clock,todo,weather');
+  assert.match(localParse('move the timer to the top', w).reply, /couldn't find/);
+});

@@ -119,10 +119,9 @@ html[data-aurora="off"] .aurora__layer::after { animation: none; }
   min-height: 180px; padding: var(--space-5);
   background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg);
   box-shadow: 0 8px 30px rgb(0 0 0 / 0.5);
-  animation: rise var(--dur-base) var(--ease-out) both;
 }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-.card-title { font-size: 0.9rem; font-weight: 600; color: var(--color-text-muted); }
+.card-title { flex: 1; min-width: 0; font-size: 0.9rem; font-weight: 600; color: var(--color-text-muted); }
 .card-remove {
   width: var(--tap); height: var(--tap); margin: calc(var(--space-3) * -1) calc(var(--space-3) * -1) 0 0;
   display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--color-text-muted);
@@ -167,7 +166,7 @@ html[data-aurora="off"] .aurora__layer::after { animation: none; }
 .todo-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); color: var(--color-text-muted); font-size: 0.9rem; }
 .todo-foot .btn { min-height: 40px; font-size: 0.9rem; }
 
-.card.done { border-color: var(--color-ok); animation: rise var(--dur-base) var(--ease-out) both, pulse 1.2s ease-in-out 3; }
+.card.done { border-color: var(--color-ok); animation: pulse 1.2s ease-in-out 3; }
 .card.done .big { color: var(--color-ok); }
 
 /* ---------- empty state ---------- */
@@ -268,3 +267,22 @@ html.modal-fallback body { overflow: hidden; }
   background: rgb(0 0 0 / 0.85); border: 1px solid var(--color-border); border-radius: var(--radius-md);
   color: #c9f7d4; font: 12px/1.45 ui-monospace, Menlo, monospace; white-space: pre-wrap; user-select: text;
 }
+
+/* ---------- moving cards ---------- */
+.card.enter { animation: rise var(--dur-base) var(--ease-out) both; } /* only new cards; a finished animation would pin transform */
+.card-handle {
+  flex: none; width: var(--tap); height: var(--tap); margin: calc(var(--space-3) * -1) 0 0 calc(var(--space-3) * -1);
+  display: grid; place-items: center; border: 0; border-radius: var(--radius-md);
+  background: transparent; color: var(--color-text-muted); cursor: grab;
+  touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.card-handle:active, .card-handle[aria-expanded="true"] { background: var(--color-surface-2); color: var(--color-text); }
+.card.dragging {
+  z-index: 20; cursor: grabbing; border-color: var(--color-primary); background: #0f1218;
+  box-shadow: 0 20px 50px rgb(0 0 0 / 0.6);
+}
+.card.arranging { border-color: var(--color-primary); }
+html.is-dragging, html.is-dragging * { -webkit-user-select: none; user-select: none; cursor: grabbing !important; }
+.move-buttons { flex: 1; display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: calc(var(--space-3) * -1); }
+.move-buttons .btn { min-height: var(--tap); padding: 0 var(--space-4); }
+.move-btn { min-width: var(--tap); font-size: 1.1rem; }

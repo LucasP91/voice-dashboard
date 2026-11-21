@@ -109,6 +109,14 @@ export function applyActions(widgets, actions) {
       if (i >= 0) list.splice(i, 1);
     } else if (a.op === 'clear') {
       list.length = 0;
+    } else if (a.op === 'move') {
+      const from = list.findIndex((x) => x.id === a.id);
+      if (from < 0) continue;
+      const last = list.length - 1;
+      const to = { first: 0, last, earlier: from - 1, later: from + 1 }[a.to] ?? Number(a.to);
+      if (!Number.isInteger(to)) continue;
+      const [w] = list.splice(from, 1);
+      list.splice(clamp(to, 0, last), 0, w);
     } else if (a.op === 'todo_add') {
       const todo = ensureTodo();
       if (!todo) continue;
@@ -152,6 +160,12 @@ const RE = {
   todoDone2: /^(?:i\s+)?(?:finished|completed)\s+(.+)$/i,
 };
 
+/** Finds the widget a spoken name refers to: its title, its type ("clock", "timers"), or a weather city. */
+function findWidget(widgets, target) {
+  const t = target.toLowerCase().replace(/^(?:to-?\s?do|todo)(?:\s+list)?$/, 'todo');
+  return widgets.find((w) => (w.title || '').toLowerCase().includes(t) || w.type === t.replace(/s$/, '') || (w.city || '').toLowerCase() === t) || null;
+}
+
 const splitTasks = (s) => s.split(/[,;]/).map((t) => cap1(t.trim())).filter(Boolean);
 
 export function localParse(text, widgets = []) {
@@ -185,10 +199,19 @@ export function localParse(text, widgets = []) {
   m = clean.match(RE.todoDone) || clean.match(RE.todoDone2);
   if (m && todo && findTodoItem(todo, m[1])) return { reply: `Ticked off “${m[1]}”.`, actions: [{ op: 'todo_done', match: m[1] }] };
 
+  const mv = l.match(/^(?:move|put)\s+(?:the\s+|my\s+)?(.+?)(?:\s+widget|\s+card)?\s+(?:to\s+|at\s+)?(?:the\s+)?(top|first|start|front|beginning|bottom|last|end|back|up|down|left|right|earlier|later)$/);
+  if (mv) {
+    const hit = findWidget(widgets, mv[1]);
+    if (!hit) return { reply: `I couldn't find “${mv[1]}” on the dashboard.`, actions: [] };
+    const to = { top: 'first', first: 'first', start: 'first', front: 'first', beginning: 'first', bottom: 'last', last: 'last', end: 'last', back: 'last', up: 'earlier', left: 'earlier', earlier: 'earlier', down: 'later', right: 'later', later: 'later' }[mv[2]];
+    const name = hit.title || hit.type;
+    return { reply: { first: `Moved ${name} to the start.`, last: `Moved ${name} to the end.`, earlier: `Moved ${name} earlier.`, later: `Moved ${name} later.` }[to], actions: [{ op: 'move', id: hit.id, to }] };
+  }
+
   const rm = l.match(/^(?:remove|delete|get rid of)\s+(?:the\s+|my\s+)?(.+?)(?:\s+widget)?$/);
   if (rm) {
     const target = rm[1];
-    const hit = widgets.find((w) => (w.title || '').toLowerCase().includes(target) || w.type === target.replace(/s$/, '') || (w.city || '').toLowerCase() === target);
+    const hit = findWidget(widgets, target);
     return hit
       ? { reply: `Removed ${hit.title || hit.type}.`, actions: [{ op: 'remove', id: hit.id }] }
       : { reply: `I couldn't find “${target}” on the dashboard.`, actions: [] };
@@ -226,6 +249,7 @@ Action forms:
   {"op":"update","id":"<id>","changes":{}} change an existing widget
   {"op":"remove","id":"<id>"}              remove a widget
   {"op":"clear"}                           remove every widget
+  {"op":"move","id":"<id>","to":"first"|"last"|"earlier"|"later"|<index>}  reorder a widget
   {"op":"todo_add","items":["..."]}        add tasks to the to-do list (it is created if missing)
   {"op":"todo_done","match":"<words from the task>","done":true}
   {"op":"todo_remove","match":"<words from the task>"}

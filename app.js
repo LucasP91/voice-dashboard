@@ -51,15 +51,66 @@ function el(tag, props = {}, ...kids) {
 const setTranscript = (text) => { transcript.textContent = text; };
 
 // ---------- widgets ----------
+const seenIds = new Set(); // only cards that are new get the entrance animation, not every re-render
+let arrangingId = null;    // the card currently showing its ◀ ▶ move buttons
+
+function gripIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '22');
+  svg.setAttribute('height', '22');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('fill', 'currentColor');
+  for (const [cx, cy] of [[9, 6], [15, 6], [9, 12], [15, 12], [9, 18], [15, 18]]) {
+    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dot.setAttribute('cx', cx); dot.setAttribute('cy', cy); dot.setAttribute('r', '1.7');
+    svg.append(dot);
+  }
+  return svg;
+}
+
+const labelOf = (w) => w.title || w.type[0].toUpperCase() + w.type.slice(1);
+
 function card(w, extraClass, ...body) {
-  const label = w.title || w.type[0].toUpperCase() + w.type.slice(1);
-  return el('section', { class: `card ${extraClass || ''}`.trim(), 'data-id': w.id, 'aria-label': label },
-    el('div', { class: 'card-head' },
+  const label = labelOf(w);
+  const index = widgets.findIndex((x) => x.id === w.id);
+  const arranging = arrangingId === w.id;
+  const isNew = !seenIds.has(w.id);
+  seenIds.add(w.id);
+
+  // Drag the handle to move the card; tap it (or press Enter) for ◀ ▶ buttons; arrow keys move it too.
+  const handle = el('button', {
+    class: 'card-handle', type: 'button', 'data-handle': w.id, 'aria-expanded': String(arranging),
+    'aria-label': `Move ${label}`, title: 'Drag to move, or tap for move buttons',
+    onpointerdown: (e) => startDrag(e, w.id),
+    onkeydown: (e) => keyMove(e, w.id),
+    onclick: () => {
+      if (suppressClick) { suppressClick = false; return; }
+      arrangingId = arranging ? null : w.id;
+      focusAfterRender = `[data-handle="${w.id}"]`;
+      render();
+    },
+  }, gripIcon());
+
+  const moveBtn = (to, icon, name, disabled) => el('button', {
+    class: 'btn move-btn', type: 'button', 'data-move': to, 'aria-label': `Move ${label} ${name}`, text: icon,
+    ...(disabled ? { disabled: '' } : {}),
+    onclick: () => moveWidget(w.id, to),
+  });
+
+  const head = arranging
+    ? el('div', { class: 'card-head' }, handle,
+      el('div', { class: 'move-buttons', role: 'group', 'aria-label': `Move ${label}` },
+        moveBtn('earlier', '◀', 'earlier', index === 0),
+        moveBtn('later', '▶', 'later', index === widgets.length - 1),
+        el('button', { class: 'btn btn-primary', type: 'button', text: 'Done', onclick: () => { arrangingId = null; focusAfterRender = `[data-handle="${w.id}"]`; render(); } }),
+      ))
+    : el('div', { class: 'card-head' }, handle,
       el('h2', { class: 'card-title', text: label }),
-      el('button', { class: 'card-remove', type: 'button', 'aria-label': `Remove ${label}`, text: '✕', onclick: () => mutate(() => { widgets = widgets.filter((x) => x.id !== w.id); }) }),
-    ),
-    ...body,
-  );
+      el('button', { class: 'card-remove', type: 'button', 'aria-label': `Remove ${label}`, text: '✕', onclick: () => mutate(() => { widgets = widgets.filter((x) => x.id !== w.id); }) }));
+
+  const classes = ['card', extraClass, isNew && 'enter', arranging && 'arranging'].filter(Boolean).join(' ');
+  return el('section', { class: classes, 'data-id': w.id, 'aria-label': label }, head, ...body);
 }
 const body = (...kids) => el('div', { class: 'card-body' }, ...kids);
 
@@ -140,6 +191,9 @@ const buildWeather = (w) => card(w, '', body(el('div', { class: 'big', 'data-wea
 const BUILDERS = { clock: buildClock, timer: buildTimer, note: buildNote, checklist: buildChecklist, weather: buildWeather, todo: buildTodo };
 
 function render() {
+  // Never rebuild the cards mid-drag (a sheet sync or timer could fire); do it once the card has landed.
+  if (drag?.active || settling) { renderQueued = true; return; }
+  renderQueued = false;
   // Keep a half-typed task and its focus across re-renders (sheet polling re-renders the card).
   const typing = $('#todo-input');
   const draft = typing?.value || '';
@@ -150,7 +204,166 @@ function render() {
   if (todoInput && draft && !refocusTodo) todoInput.value = draft;
   if (todoInput && (refocusTodo || hadFocus)) todoInput.focus();
   refocusTodo = false;
+  if (focusAfterRender) {
+    // first selector that matches wins (a comma list would pick whichever comes first in the page)
+    const target = [].concat(focusAfterRender).map((sel) => grid.querySelector(sel)).find(Boolean);
+    target?.focus();
+    focusAfterRender = null;
+  }
   tick();
+}
+
+// ---------- moving cards ----------
+const DRAG_START_PX = 8;     // finger travel before a press on the handle becomes a drag
+const SETTLE_MS = 200;
+const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+let drag = null;             // { id, pointerId, startX, startY, grabX, grabY, cardEl, handle, active }
+let settling = false;
+let renderQueued = false;
+let suppressClick = false;   // a drag ends with a click on the handle; don't treat it as a tap
+let focusAfterRender = null;
+
+function announceMove(id) {
+  const i = widgets.findIndex((w) => w.id === id);
+  const w = widgets[i];
+  setTranscript(`Moved ${labelOf(w)} to position ${i + 1} of ${widgets.length}.`);
+}
+
+function moveWidget(id, to) {
+  const before = widgets.map((w) => w.id).join();
+  widgets = applyActions(widgets, [{ op: 'move', id, to }]);
+  if (widgets.map((w) => w.id).join() === before) return;
+  save();
+  // keep focus on the button that was pressed, or the other one if this end is reached
+  focusAfterRender = [`[data-id="${id}"] [data-move="${to}"]:not([disabled])`, `[data-id="${id}"] [data-move]:not([disabled])`, `[data-handle="${id}"]`];
+  render();
+  announceMove(id);
+}
+
+function keyMove(e, id) {
+  const to = { ArrowLeft: 'earlier', ArrowUp: 'earlier', ArrowRight: 'later', ArrowDown: 'later', Home: 'first', End: 'last' }[e.key];
+  if (!to) return;
+  e.preventDefault();
+  moveWidget(id, to);
+  focusAfterRender = null;
+  grid.querySelector(`[data-handle="${id}"]`)?.focus();
+}
+
+function startDrag(e, id) {
+  if (drag || settling || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  const handle = e.currentTarget;
+  drag = { id, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, cardEl: handle.closest('.card'), handle, active: false };
+  try { handle.setPointerCapture(e.pointerId); } catch { /* older Safari */ }
+  handle.addEventListener('pointermove', onDragMove);
+  handle.addEventListener('pointerup', onDragEnd);
+  handle.addEventListener('pointercancel', onDragCancel);
+}
+
+function cardUnder(x, y) {
+  return [...grid.children].find((c) => {
+    if (c === drag.cardEl || c.dataset.flipping) return false; // ignore cards still sliding out of the way
+    const r = c.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  });
+}
+
+function followPointer(x, y) {
+  const c = drag.cardEl;
+  c.style.transform = '';
+  const r = c.getBoundingClientRect();
+  c.style.transform = `translate(${x - drag.grabX - r.left}px, ${y - drag.grabY - r.top}px) scale(1.02)`;
+}
+
+/** Reorders the DOM, then slides the other cards from their old spots to the new ones (FLIP). */
+function flip(change) {
+  const others = [...grid.children].filter((c) => c !== drag.cardEl);
+  const before = new Map(others.map((c) => [c, c.getBoundingClientRect()]));
+  change();
+  if (reducedMotion()) return;
+  for (const c of others) {
+    const a = before.get(c);
+    const b = c.getBoundingClientRect();
+    const dx = a.left - b.left;
+    const dy = a.top - b.top;
+    if (!dx && !dy) continue;
+    c.dataset.flipping = '1';
+    c.style.transition = 'none';
+    c.style.transform = `translate(${dx}px, ${dy}px)`;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      c.style.transition = `transform ${SETTLE_MS}ms var(--ease-out)`;
+      c.style.transform = '';
+    }));
+    setTimeout(() => { delete c.dataset.flipping; c.style.transition = ''; }, SETTLE_MS + 40);
+  }
+}
+
+function onDragMove(e) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  if (!drag.active) {
+    if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < DRAG_START_PX) return;
+    const r = drag.cardEl.getBoundingClientRect();
+    drag.grabX = drag.startX - r.left;
+    drag.grabY = drag.startY - r.top;
+    drag.active = true;
+    drag.cardEl.classList.add('dragging');
+    document.documentElement.classList.add('is-dragging');
+  }
+  e.preventDefault();
+  const over = cardUnder(e.clientX, e.clientY);
+  if (over) {
+    const cards = [...grid.children];
+    const from = cards.indexOf(drag.cardEl);
+    const to = cards.indexOf(over);
+    flip(() => grid.insertBefore(drag.cardEl, from < to ? over.nextSibling : over));
+  }
+  followPointer(e.clientX, e.clientY);
+}
+
+function endDrag() {
+  const d = drag;
+  d.handle.removeEventListener('pointermove', onDragMove);
+  d.handle.removeEventListener('pointerup', onDragEnd);
+  d.handle.removeEventListener('pointercancel', onDragCancel);
+  try { d.handle.releasePointerCapture(d.pointerId); } catch { /* already released */ }
+  document.documentElement.classList.remove('is-dragging');
+  drag = null;
+  return d;
+}
+
+function land(cardEl, then) {
+  settling = true;
+  cardEl.style.transition = reducedMotion() ? 'none' : `transform ${SETTLE_MS}ms var(--ease-out)`;
+  cardEl.style.transform = '';
+  setTimeout(() => {
+    cardEl.classList.remove('dragging');
+    cardEl.style.transition = '';
+    settling = false;
+    then?.();
+    if (renderQueued) render();
+  }, reducedMotion() ? 0 : SETTLE_MS);
+}
+
+function onDragEnd(e) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  const d = endDrag();
+  if (!d.active) return; // just a tap: the click handler shows the move buttons
+  suppressClick = true;
+  setTimeout(() => { suppressClick = false; }, 0);
+  // New order = the cards as dropped, plus any widget a command added mid-drag (not on screen yet).
+  const order = [...grid.children].map((c) => c.dataset.id);
+  const onScreen = new Set(order);
+  const before = widgets.map((w) => w.id).join();
+  widgets = [...order.map((id) => widgets.find((w) => w.id === id)).filter(Boolean), ...widgets.filter((w) => !onScreen.has(w.id))];
+  const moved = widgets.map((w) => w.id).join() !== before;
+  if (moved) save();
+  land(d.cardEl, () => { if (moved) { renderQueued = true; announceMove(d.id); } });
+}
+
+function onDragCancel(e) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  const d = endDrag();
+  if (!d.active) return;
+  land(d.cardEl, () => { renderQueued = true; }); // put the cards back in the saved order
 }
 
 // ---------- once-a-second updates ----------

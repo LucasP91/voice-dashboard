@@ -20,6 +20,7 @@ A voice-controlled touch dashboard for an iPad, hosted as a static site on GitHu
 | "Clear the completed tasks" | Deletes ticked tasks |
 | "Set a timer for 10 minutes", "Weather in London", "Add a clock", "Note: …" | Other widgets |
 | "Remove the clock", "Clear the dashboard" | Removes widgets |
+| "Move the clock to the top", "Put the to-do list at the end", "Move the weather left" | Reorders cards |
 
 ## Google Sheet sync (Claude Duet)
 
